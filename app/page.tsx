@@ -1,16 +1,29 @@
 'use client';
+/* oxlint-disable next/no-img-element -- Quick Look needs an img child; the AR link uses a tiny local SVG. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Box, Camera, CameraOff, Check, Crosshair, Expand, Eye, FileBox, FolderOpen, Info, LoaderCircle, Maximize, Minus, Move3D, Plus, ScanFace, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { assetUrl } from '@/lib/base';
 import type { ViewerEngine } from '@/lib/viewer/engine';
 import type { HeadTracker, TrackingStatus } from '@/lib/viewer/tracker';
-import { validateFile, type ModelInfo } from '@/lib/viewer/model';
+import type { ModelInfo } from '@/lib/viewer/model';
+import { validateFile } from '@/lib/viewer/file';
 
 const cubeInfo: ModelInfo = { name: 'Depth cube', bytes: 0, format: 'PLY', vertices: 24, triangles: 12, meshes: 1, points: false, textures: 0 };
 const formatNumber = (n: number) => new Intl.NumberFormat('en', { notation: n > 99999 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(n);
+function PhysicalNumber({ label, ariaLabel, value, min, max, unit, onCommit }: { label: string; ariaLabel: string; value: number; min: number; max: number; unit: string; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  const commit = () => {
+    const parsed = Number(draft);
+    if (!draft.trim() || !Number.isFinite(parsed)) { setDraft(String(value)); return; }
+    const next = Math.max(min, Math.min(max, parsed));
+    setDraft(String(next)); if (next !== value) onCommit(next);
+  };
+  return <label className="number-field">{label}<span><input type="number" aria-label={ariaLabel} min={min} max={max} step={unit === 'cm' ? 0.5 : 1} value={draft} onChange={event => setDraft(event.target.value)} onBlur={commit} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}/>{unit}</span></label>;
+}
 export default function Home() {
   const canvasHost = useRef<HTMLDivElement>(null);
   const viewer = useRef<HTMLElement>(null);
@@ -50,14 +63,17 @@ export default function Home() {
   useEffect(() => {
     alive.current = true;
     let canceled = false;
+    let ownedEngine: ViewerEngine | undefined;
+    let ownedTracker: HeadTracker | undefined;
     let lastTelemetry = 0;
     const mobile = window.innerWidth < 700;
-    if (mobile) { setScreenWidth(7); setDistance(40); }
-    const ar = document.createElement('a'); setArAvailable(ar.relList?.supports?.('ar') ?? false);
     Promise.all([import('@/lib/viewer/engine'), import('@/lib/viewer/tracker')]).then(([{ ViewerEngine }, { HeadTracker }]) => {
       if (canceled || !canvasHost.current || !video.current) return;
+      if (mobile) { setScreenWidth(7); setDistance(40); }
+      const ar = document.createElement('a'); setArAvailable(ar.relList?.supports?.('ar') ?? false);
       try {
         engine.current = new ViewerEngine(canvasHost.current, setFps, setError);
+        ownedEngine = engine.current;
         engine.current.distance = mobile ? 0.4 : 0.55; engine.current.center();
         tracker.current = new HeadTracker(video.current, s => {
           setStatus(s);
@@ -67,6 +83,7 @@ export default function Home() {
           if (performance.now() - lastTelemetry > 180) { setTelemetry({ x: position.x * 100, y: position.y * 100, z: position.z * 100, ms }); lastTelemetry = performance.now(); }
         }, setError);
         tracker.current.distance = mobile ? 0.4 : 0.55;
+        ownedTracker = tracker.current;
         setReady(true);
       } catch { setError('WebGL 2 is unavailable. Enable hardware acceleration or open this page in current Safari or Chrome.'); }
     }).catch(() => setError('The viewer could not load. Check your connection and reload the page.'));
@@ -77,8 +94,10 @@ export default function Home() {
     const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setFocus(false); };
     document.addEventListener('visibilitychange', pause); window.addEventListener('pagehide', pageHide); window.addEventListener('orientationchange', orientation); document.addEventListener('fullscreenchange', fullscreen); window.addEventListener('keydown', escape);
     return () => {
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- Invalidate the current async operation counter; this is not a DOM ref.
       canceled = true; alive.current = false; ++operation.current;
-      tracker.current?.stop(); engine.current?.dispose(); engine.current = null;
+      ownedTracker?.stop(); ownedEngine?.dispose(); engine.current = null;
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- Release the latest local file URL, not the initial URL.
       if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
       document.removeEventListener('visibilitychange', pause); window.removeEventListener('pagehide', pageHide); window.removeEventListener('orientationchange', orientation); document.removeEventListener('fullscreenchange', fullscreen); window.removeEventListener('keydown', escape);
     };
@@ -87,6 +106,7 @@ export default function Home() {
   const load = useCallback(async (file?: File) => {
     if (!engine.current) return;
     const id = ++operation.current;
+    engine.current.cancelPendingLoad();
     try {
       if (file) validateFile(file.name, file.size);
       setError(''); setLoading(file?.name ?? 'USDZ-test.usdz');
@@ -146,6 +166,7 @@ export default function Home() {
       <button className="button primary header-open" onClick={() => input.current?.click()} disabled={!ready || !!loading}><FolderOpen size={17} /> Open model</button>
     </header>
     <div className="workspace">
+      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- File drop is an alternative to the keyboard-accessible Open model button. */}
       <section ref={viewer} className={`viewer ${focus ? 'is-focused' : ''}`} aria-label="3D model viewer" onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }} onDrop={e => { e.preventDefault(); setDragging(false); const file = e.dataTransfer.files[0]; if (file) void load(file); }}>
         <div ref={canvasHost} className="canvas-host" />
         <div className="viewport-heading"><div className="scene-name"><Box size={16}/><span>{info.name}</span></div><span className={`live-status ${tracking ? 'is-live' : ''}`}><i />{active ? statusLabel : preview ? 'Pointer preview' : mode === 'orbit' ? 'Orbit view' : 'Window view'}</span></div>
@@ -183,10 +204,10 @@ export default function Home() {
         </section>
         <section className="control-section" aria-labelledby="view-title">
           <div className="section-heading"><h2 id="view-title"><SlidersHorizontal size={17}/> View</h2></div>
-          <div className="view-mode" role="group" aria-label="View mode"><button aria-pressed={mode === 'window'} className={mode === 'window' ? 'selected' : ''} onClick={() => changeMode('window')}><Maximize size={16}/>Window</button><button aria-pressed={mode === 'orbit'} className={mode === 'orbit' ? 'selected' : ''} onClick={() => changeMode('orbit')}><Move3D size={16}/>Orbit</button></div>
+          <ToggleGroup className="view-mode" aria-label="View mode" value={[mode]} onValueChange={values => { const value = values[0]; if (value === 'window' || value === 'orbit') changeMode(value); }}><ToggleGroupItem value="window" aria-label="Window view"><Maximize size={16}/>Window</ToggleGroupItem><ToggleGroupItem value="orbit" aria-label="Orbit view"><Move3D size={16}/>Orbit</ToggleGroupItem></ToggleGroup>
           {mode === 'window' && <div className="toggle-row"><label htmlFor="preview">Pointer preview</label><Switch id="preview" checked={preview} disabled={active} onCheckedChange={changePreview}/></div>}
           <div className="toggle-row"><label htmlFor="room">Depth box</label><Switch id="room" checked={room} onCheckedChange={v => { setRoom(v); engine.current?.setRoom(v); }}/></div>
-          <div className="range-label"><label id="depth-label">Box depth</label><output>{depth} cm</output></div>
+          <div className="range-label"><span id="depth-label">Box depth</span><output>{depth} cm</output></div>
           <Slider aria-labelledby="depth-label" min={8} max={60} step={1} value={[depth]} onValueChange={v => { const n = Array.isArray(v) ? v[0] : v; setDepth(n); engine.current?.setDepth(n); }}/>
         </section>
         <section className="control-section" aria-labelledby="model-title">
@@ -199,10 +220,10 @@ export default function Home() {
         </section>
         <details className="control-section calibration"><summary><span><Crosshair size={17}/> Physical calibration</span><Plus size={15}/></summary>
           <p>Measure the width of this browser’s visible page, then your eye-to-screen distance. Center your face on the 3D window before tracking.</p>
-          <label className="number-field">Page width <span><input type="number" aria-label="Visible browser page width in centimeters" min={5} max={200} step={0.5} value={screenWidth} onChange={e => { const n = Number(e.target.value); if (n >= 5 && n <= 200) { setScreenWidth(n); engine.current?.setPhysicalWidth(n); calibrationChanged(); } }}/> cm</span></label>
-          <label className="number-field">Viewing distance <span><input type="number" aria-label="Eye to screen distance in centimeters" min={15} max={150} value={distance} onChange={e => { const n = Number(e.target.value); if (n >= 15 && n <= 150) { setDistance(n); if (tracker.current) tracker.current.distance = n / 100; if (engine.current) { engine.current.distance = n / 100; engine.current.center(); } calibrationChanged(); } }}/> cm</span></label>
-          <label className="number-field">Pupil distance <span><input type="number" aria-label="Interpupillary distance in millimeters" min={40} max={85} value={ipd} onChange={e => { const n = Number(e.target.value); if (n >= 40 && n <= 85) { setIpd(n); if (tracker.current) tracker.current.ipd = n / 1000; calibrationChanged(); } }}/> mm</span></label>
-          <label className="eye-label" id="eye-label">Viewpoint</label><Select value={eye} onValueChange={v => { if (v === 'center' || v === 'left' || v === 'right') { setEye(v); if (tracker.current) tracker.current.eye = v; } }}><SelectTrigger className="model-select" aria-labelledby="eye-label"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="center">Between both eyes</SelectItem><SelectItem value="left">Left eye</SelectItem><SelectItem value="right">Right eye</SelectItem></SelectContent></Select>
+          <PhysicalNumber key={`width-${screenWidth}`} label="Page width" ariaLabel="Visible browser page width in centimeters" value={screenWidth} min={5} max={200} unit="cm" onCommit={n => { setScreenWidth(n); engine.current?.setPhysicalWidth(n); calibrationChanged(); }}/>
+          <PhysicalNumber key={`distance-${distance}`} label="Viewing distance" ariaLabel="Eye to screen distance in centimeters" value={distance} min={15} max={150} unit="cm" onCommit={n => { setDistance(n); if (tracker.current) tracker.current.distance = n / 100; if (engine.current) { engine.current.distance = n / 100; engine.current.center(); } calibrationChanged(); }}/>
+          <PhysicalNumber key={`ipd-${ipd}`} label="Pupil distance" ariaLabel="Interpupillary distance in millimeters" value={ipd} min={40} max={85} unit="mm" onCommit={n => { setIpd(n); if (tracker.current) tracker.current.ipd = n / 1000; calibrationChanged(); }}/>
+          <span className="eye-label" id="eye-label">Viewpoint</span><Select value={eye} onValueChange={v => { if (v === 'center' || v === 'left' || v === 'right') { setEye(v); if (tracker.current) tracker.current.eye = v; } }}><SelectTrigger className="model-select" aria-labelledby="eye-label"><SelectValue>{eye === 'center' ? 'Between both eyes' : eye === 'left' ? 'Left eye' : 'Right eye'}</SelectValue></SelectTrigger><SelectContent><SelectItem value="center">Between both eyes</SelectItem><SelectItem value="left">Left eye</SelectItem><SelectItem value="right">Right eye</SelectItem></SelectContent></Select>
           <p className="small-copy">These are starting estimates, not device measurements. For the clearest single-eye illusion, choose one eye and close the other.</p>
         </details>
         <details className="control-section help"><summary><span><Info size={17}/> How to get the depth effect</span><Plus size={15}/></summary><ol><li>Try the cube first. Put your device on a stable surface in good light.</li><li>Check Physical calibration, enable tracking, then set your eye position.</li><li>Move your head sideways or lean closer. The front of the box stays anchored to the screen.</li></ol><p>The camera estimates eye position, not where you are looking. A normal screen shows one perspective at a time; eye rotation alone does not orbit the scene.</p><p>On iPhone or iPad, use Safari over HTTPS and allow the front camera. Full view works without native fullscreen. Tracking pauses when the app is backgrounded.</p><p>Keyboard: focus the canvas, use arrow keys to preview perspective, +/− to zoom, R to reset, and Escape to leave full view.</p><a className="text-button" href={assetUrl('/research.html')} target="_blank" rel="noreferrer">Research & implementation notes<ArrowUpRight size={14}/></a></details>

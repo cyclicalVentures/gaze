@@ -1,15 +1,8 @@
 import * as THREE from 'three';
-import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
-import { USDLoader } from 'three/addons/loaders/USDLoader.js';
+import { validateFile } from './file';
+export { validateFile, MAX_FILE_BYTES } from './file';
 
 export type ModelInfo = { name: string; bytes: number; format: 'USDZ' | 'PLY'; vertices: number; triangles: number; meshes: number; points: boolean; textures: number };
-export const MAX_FILE_BYTES = 150 * 1024 * 1024;
-
-export function validateFile(name: string, size: number) {
-  if (!/\.(ply|usdz)$/i.test(name)) throw new Error('Choose a .ply or .usdz file.');
-  if (!size) throw new Error('This file is empty. Choose another model.');
-  if (size > MAX_FILE_BYTES) throw new Error('This model is larger than 150 MB. Export a smaller model for this browser.');
-}
 export function disposeObject(root: THREE.Object3D) {
   const textures = new Set<THREE.Texture>();
   const materials = new Set<THREE.Material>();
@@ -34,6 +27,7 @@ export async function parseModel(buffer: ArrayBuffer, name: string): Promise<{ r
     const vertexCount = Number(header.match(/element vertex (\d+)/)?.[1]);
     const faceCount = Number(header.match(/element face (\d+)/)?.[1] ?? 0);
     if (!vertexCount || vertexCount > 5_000_000 || faceCount > 5_000_000) throw new Error('Use a PLY with 1–5 million vertices and at most 5 million faces.');
+    const { PLYLoader } = await import('three/addons/loaders/PLYLoader.js');
     const geometry = new PLYLoader().parse(buffer);
     const hasFaces = (geometry.index?.count ?? 0) > 0;
     if (hasFaces && !geometry.hasAttribute('normal')) geometry.computeVertexNormals();
@@ -45,6 +39,7 @@ export async function parseModel(buffer: ArrayBuffer, name: string): Promise<{ r
   } else {
     const signature = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4));
     if (signature[0] !== 0x50 || signature[1] !== 0x4b) throw new Error('This file is not a valid USDZ archive. Export the model again.');
+    const { USDLoader } = await import('three/addons/loaders/USDLoader.js');
     root = await new Promise<THREE.Group>((resolve, reject) => {
       try { new USDLoader().parse(buffer, '', resolve, reject); } catch (error) { reject(error); }
     });

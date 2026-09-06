@@ -110,6 +110,7 @@ export class ViewerEngine {
     if (this.disposed || id !== this.loadId) { disposeObject(result.root); return null; }
     this.replace(result.root); return result.info;
   }
+  cancelPendingLoad() { ++this.loadId; }
   private replace(root: THREE.Group) {
     if (this.modelContent) { this.model.remove(this.modelContent); disposeObject(this.modelContent); }
     this.modelContent = root; this.model.add(root);

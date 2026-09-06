@@ -10,6 +10,7 @@ export class HeadTracker {
   private lastTime = -1;
   private lastSent = 0;
   private lastFace = 0;
+  private initTimeout?: number;
   private baseline?: EyeObservation;
   private recent: EyeObservation[] = [];
   private filters = [new OneEuroFilter(), new OneEuroFilter(), new OneEuroFilter(1.3, 7)];
@@ -27,16 +28,19 @@ export class HeadTracker {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } } });
       if (generation !== this.generation) { stream.getTracks().forEach(t => t.stop()); return; }
       this.stream = stream;
+      for (const track of stream.getVideoTracks()) track.onended = () => {
+        if (generation === this.generation) this.fail('The camera was disconnected or access was revoked. Reconnect it and start tracking again.');
+      };
       this.video.srcObject = stream;
       await this.video.play();
       if (generation !== this.generation) return;
       this.worker = new Worker(new URL('./tracking.worker.ts', import.meta.url), { type: 'module' });
-      const initTimeout = window.setTimeout(() => { if (generation === this.generation && this.status === 'starting') this.fail('Camera tracking took too long to load. Check your connection and try again.'); }, 45000);
-      this.worker.onerror = () => { clearTimeout(initTimeout); this.fail('The camera tracker could not start. Try an up-to-date Safari or Chrome browser.'); };
+      this.initTimeout = window.setTimeout(() => { if (generation === this.generation && this.status === 'starting') this.fail('Camera tracking took too long to load. Check your connection and try again.'); }, 45000);
+      this.worker.onerror = () => { this.fail('The camera tracker could not start. Try an up-to-date Safari or Chrome browser.'); };
       this.worker.onmessage = ({ data }) => {
         if (generation !== this.generation) return;
-        if (data.type === 'ready') { clearTimeout(initTimeout); this.updateStatus('ready'); this.loop(); }
-        if (data.type === 'error') { clearTimeout(initTimeout); this.fail('The eye tracker could not process the camera. Stop and try again, or use pointer preview.'); }
+        if (data.type === 'ready') { clearTimeout(this.initTimeout); this.initTimeout = undefined; this.updateStatus('ready'); this.loop(); }
+        if (data.type === 'error') { this.fail('The eye tracker could not process the camera. Stop and try again, or use pointer preview.'); }
         if (data.type === 'result') {
           this.busy = false;
           const observation = data.observation as EyeObservation | null;
@@ -61,6 +65,8 @@ export class HeadTracker {
     if (!this.worker) return;
     this.frame = requestAnimationFrame(this.loop);
     const now = performance.now();
+    if (this.busy && now - this.lastSent > 5000) { this.fail('Camera processing stalled. Start tracking again or use pointer preview.'); return; }
+    if (this.baseline && now - this.lastFace > 650) this.updateStatus('lost');
     if (this.busy || now - this.lastSent < 32 || this.video.readyState < 2 || this.video.currentTime === this.lastTime) return;
     this.busy = true; this.lastTime = this.video.currentTime; this.lastSent = now;
     const generation = this.generation;
@@ -78,6 +84,7 @@ export class HeadTracker {
   }
   stop() {
     ++this.generation; cancelAnimationFrame(this.frame);
+    clearTimeout(this.initTimeout); this.initTimeout = undefined;
     this.worker?.terminate(); this.worker = undefined;
     this.stream?.getTracks().forEach(t => t.stop()); this.stream = undefined;
     this.video.pause(); this.video.srcObject = null;

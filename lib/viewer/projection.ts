@@ -33,11 +33,18 @@ export class OneEuroFilter {
     this.raw = value; this.time = seconds; return this.value;
   }
 }
-export type EyeObservation = { x: number; y: number; span: number; left: { x: number; y: number }; right: { x: number; y: number }; time: number };
+export type EyeObservation = { x: number; y: number; span: number; left: { x: number; y: number }; right: { x: number; y: number }; time: number; imageWidth?: number; imageHeight?: number };
 export function estimateEye(observation: EyeObservation, baseline: EyeObservation, distance: number, ipd: number, eye: 'center' | 'left' | 'right' = 'center'): EyePosition {
   if (observation.span <= 0 || baseline.span <= 0 || distance <= 0 || ipd <= 0) throw new Error('Invalid eye calibration.');
   const z = Math.max(0.15, Math.min(1.5, distance * baseline.span / observation.span));
   const focal = baseline.span * distance / ipd;
   const point = eye === 'center' ? observation : observation[eye];
-  return { x: Math.max(-0.45, Math.min(0.45, -(point.x - baseline.x) * z / focal)), y: Math.max(-0.35, Math.min(0.35, -(point.y - baseline.y) * z / focal)), z };
+  // Account for a webcam above/beside the viewport. With forward motion the
+  // neutral point changes image coordinates; differencing pixels alone would
+  // incorrectly turn that into vertical/horizontal head movement.
+  const cx = baseline.imageWidth ? baseline.imageWidth / 2 : baseline.x;
+  const cy = baseline.imageHeight ? baseline.imageHeight / 2 : baseline.y;
+  const x = ((cx - point.x) * z - (cx - baseline.x) * distance) / focal;
+  const y = ((cy - point.y) * z - (cy - baseline.y) * distance) / focal;
+  return { x: Math.max(-0.45, Math.min(0.45, x)), y: Math.max(-0.35, Math.min(0.35, y)), z };
 }
