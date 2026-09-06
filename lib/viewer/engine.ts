@@ -76,6 +76,7 @@ export class ViewerEngine {
   private contextRestored = () => { this.resize(); };
   setPhysicalWidth(cm: number) { this.metersPerPixel = cm / 100 / window.innerWidth; this.resize(); }
   calibrateOrigin() { const r = this.host.getBoundingClientRect(); this.calibrationCenter = { x: r.left + r.width / 2, y: r.top + r.height / 2 }; this.eye = { x: 0, y: 0, z: this.distance }; }
+  getScreenGeometry() { const r = this.host.getBoundingClientRect(); return { width: window.innerWidth, height: window.innerHeight, metersPerPixel: this.metersPerPixel, center: this.calibrationCenter ?? { x: r.left + r.width / 2, y: r.top + r.height / 2 } }; }
   setEye(eye: EyePosition) { this.eye = eye; }
   center() { this.eye = { x: 0, y: 0, z: this.distance }; this.pose = { ...this.eye }; this.zoom = 1; this.layoutModel(); if (this.mode === 'orbit') this.configureOrbit(); }
   setMode(mode: 'window' | 'orbit') { this.mode = mode; this.controls.enabled = mode === 'orbit'; if (mode === 'orbit') this.configureOrbit(); else this.center(); }

@@ -26,7 +26,7 @@ An L2CS-Net-derived implementation with MobileOne, MobileNet and ResNet backbone
 
 [Repository](https://github.com/ck-zhang/EyeTrax) · [adaptive calibration](https://github.com/ck-zhang/EyeTrax/blob/master/src/eyetrax/calibration/adaptive.py)
 
-Python calibration and filtering infrastructure, not a validated SOTA claim. Inspected its adaptive routine: nine-point initialization, additional spatially distributed targets, a settling interval before collecting samples, blink rejection and periodic refitting. Its repository also exposes five-point, dense-grid and Lissajous routines. These are useful references for collecting actual target/eye correspondences; our current visual tuning only selects rendering preferences. MIT code; the workflow would need a browser implementation.
+Python calibration and filtering infrastructure, not a validated SOTA claim. Inspected its adaptive routine: nine-point initialization, additional spatially distributed targets, a settling interval before collecting samples, blink rejection and periodic refitting. Its repository also exposes five-point, dense-grid and Lissajous routines. These are useful references for collecting actual target/eye correspondences; the separate depth-effect tuning only selects rendering preferences. Our new known-target calibration follows a settling/collection/check workflow. MIT code; the workflow would need a browser implementation.
 
 ## Browser calibration reference: RealEye Light Open
 
@@ -51,4 +51,4 @@ An equivariant landmark encoder with a small per-session ridge calibrator. The p
 3. Compare the current sphere model with personalized BlazeGaze using the same camera clips, geometry, targets and device. Run both at the same input resolution and report the entire camera-to-render pipeline on desktop and physical iOS hardware.
 4. Consider MobileGaze if it improves held-out angular accuracy within the phone's runtime budget. Keep model loading optional and processing local.
 
-The shortlisted backends are not installed by this update. The live change adds a depth-direction preference and separates measured distance from virtual view depth; it does not claim improved gaze accuracy from models we have not run.
+Implemented in this update: WebEyeTrack-style geometric reconstruction and radial depth refinement, followed by robust XYZ reprojection fitting, plus a local known-target polynomial ridge gaze map. Nine learning targets and five separate check targets keep fitting separate from validation. The original nose-scale estimator remains selectable. See [the method and limitations](gaze-calibration.md). BlazeGaze, OpenSeeFace, MobileGaze, EyeTrax and RealEye are not installed as backends; their benchmark results are not claims about this app. Physical-device motion and accuracy comparisons remain to be collected.

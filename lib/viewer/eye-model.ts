@@ -1,4 +1,5 @@
 import type { EyeObservation, EyePosition } from './projection';
+import { geometryLandmarks } from './metric-face';
 
 export type Vec3 = { x: number; y: number; z: number };
 export type HeadFrame = { origin: Vec3; axes: [Vec3, Vec3, Vec3]; scale: number };
@@ -39,7 +40,7 @@ export function observeFace(landmarks: Vec3[], width: number, height: number, ti
   // Require both eyes open: a blink must not become a gaze or depth jump.
   const openness = (top: number, bottom: number, a: number, b: number) => length(sub(p(top), p(bottom))) / Math.max(1, length(sub(p(a), p(b))));
   if (span < 18 || scale < 3 || openness(159, 145, 33, 133) < 0.12 || openness(386, 374, 362, 263) < 0.12 || ![left, right].every(v => [v.x, v.y, v.z].every(Number.isFinite))) return null;
-  return { ...center, span, left, right, head: { origin: mean(nose), axes: [x, y, z], scale }, imageWidth: width, imageHeight: height, time };
+  return { ...center, span, left, right, head: { origin: mean(nose), axes: [x, y, z], scale }, face: geometryLandmarks.map(p), imageWidth: width, imageHeight: height, time };
 }
 
 export function averageObservation(samples: EyeObservation[]): EyeObservation {
@@ -53,7 +54,8 @@ export function averageObservation(samples: EyeObservation[]): EyeObservation {
     const z = unit(cross(x, mean(headSamples.map(h => h.axes[1]))));
     head = { origin: mean(headSamples.map(h => h.origin)), axes: [x, unit(cross(z, x)), z], scale: average(s => s.head!.scale) };
   }
-  return { ...last, x: average(s => s.x), y: average(s => s.y), span: average(s => s.span), left: point('left'), right: point('right'), head };
+  const face = samples.every(s => s.face?.length === geometryLandmarks.length) ? geometryLandmarks.map((_, i) => mean(samples.map(s => s.face![i]))) : undefined;
+  return { ...last, x: average(s => s.x), y: average(s => s.y), span: average(s => s.span), left: point('left'), right: point('right'), head, face };
 }
 
 export function lockEyeModel(baseline: EyeObservation, ipd: number): EyeModel | undefined {

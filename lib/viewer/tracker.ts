@@ -2,8 +2,11 @@ import { assetUrl } from '../base';
 import { estimateEye, OneEuroFilter, type EyeObservation, type EyePosition } from './projection';
 import { averageObservation, lockEyeModel, reconstructEyes, type EyeModel, type GazeReading } from './eye-model';
 import { defaultTuning, mapTrackedEye, type ViewTuning } from './tuning';
+import { lockMetricFace, fitMetricFace, type MetricFaceModel } from './metric-face';
+import { gazeSignal, predictGaze, calibratedEyeOffset, type GazeProfile, type GazeSample, type ScreenGeometry } from './gaze-calibration';
 export type TrackingStatus = 'off' | 'starting' | 'ready' | 'tracking' | 'lost';
-export type DepthReading = { measured: number; neutral: number };
+export type GeometryMode = 'metric' | 'legacy';
+export type DepthReading = { measured: number; neutral: number; method: GeometryMode; errorPx?: number; calibrated: boolean };
 export class HeadTracker {
   private worker?: Worker;
   private stream?: MediaStream;
@@ -16,6 +19,12 @@ export class HeadTracker {
   private initTimeout?: number;
   private baseline?: EyeObservation;
   private eyeModel?: EyeModel;
+  private metricModel?: MetricFaceModel;
+  private geometryMode: GeometryMode = 'metric';
+  private screen?: ScreenGeometry;
+  private profile?: GazeProfile;
+  private revision = 0;
+  private listeners = new Set<(sample: GazeSample) => void>();
   private recent: EyeObservation[] = [];
   private filters = [new OneEuroFilter(), new OneEuroFilter(), new OneEuroFilter(1.3, 7)];
   private status: TrackingStatus = 'off';
@@ -24,6 +33,16 @@ export class HeadTracker {
   eye: 'center' | 'left' | 'right' = 'center';
   tuning: ViewTuning = { ...defaultTuning };
   constructor(private video: HTMLVideoElement, private onStatus: (status: TrackingStatus) => void, private onPosition: (position: EyePosition, ms: number, gaze?: GazeReading, depth?: DepthReading) => void, private onError: (message: string) => void) {}
+  get calibrationRevision() { return this.revision; }
+  get hasGazeProfile() { return !!this.profile; }
+  subscribeGaze(listener: (sample: GazeSample) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  clearGazeProfile() { this.profile = undefined; ++this.revision; }
+  setScreenGeometry(screen: ScreenGeometry) { this.screen = screen; this.clearGazeProfile(); }
+  setGeometryMode(mode: GeometryMode) { this.geometryMode = mode; this.clearGazeProfile(); this.filters.forEach(f => f.reset()); }
+  applyGazeProfile(profile: GazeProfile, revision: number) {
+    if (revision !== this.revision || !this.baseline || !this.screen || profile.width !== this.screen.width || profile.height !== this.screen.height) return false;
+    this.profile = profile; this.filters.forEach(f => f.reset()); return true;
+  }
   private updateStatus(status: TrackingStatus) { if (this.status !== status) { this.status = status; this.onStatus(status); } }
   async start() {
     this.stop(); const generation = ++this.generation;
@@ -52,15 +71,30 @@ export class HeadTracker {
           if (!observation) { if (performance.now() - this.lastFace > 650) this.updateStatus('lost'); return; }
           this.lastFace = performance.now(); this.recent.push(observation);
           this.recent = this.recent.filter(v => observation.time - v.time < 700);
-          this.updateStatus(this.baseline ? 'tracking' : 'ready');
+          if (!this.baseline) this.updateStatus('ready');
           if (this.baseline) {
             const solution = this.eyeModel ? reconstructEyes(observation, this.eyeModel, this.distance, this.ipd, this.eye) : null;
             if (this.eyeModel && !solution) { this.updateStatus('lost'); return; }
-            const head = solution?.position ?? estimateEye(observation, this.baseline, this.distance, this.ipd, this.eye);
-            const offset = solution?.eyeOffset ?? { x: 0, y: 0, z: 0 };
+            const metric = this.geometryMode === 'metric' && this.metricModel ? fitMetricFace(observation, this.metricModel, this.eye) : null;
+            if (this.geometryMode === 'metric' && this.metricModel && !metric) { this.updateStatus('lost'); return; }
+            const head = metric?.position ?? solution?.position ?? estimateEye(observation, this.baseline, this.distance, this.ipd, this.eye);
+            let offset = solution?.eyeOffset ?? { x: 0, y: 0, z: 0 };
+            if (solution && this.screen) {
+              const signal = gazeSignal(head, solution.gaze, this.screen);
+              if (signal) {
+                for (const listener of this.listeners) listener({ time: observation.time, signal, revision: this.revision });
+                if (this.profile) {
+                  const target = predictGaze(this.profile, signal);
+                  // Avoid unstable extrapolation outside the calibrated screen.
+                  if (Number.isFinite(target.x + target.y) && target.x >= -.25 && target.x <= 1.25 && target.y >= -.25 && target.y <= 1.25) offset = calibratedEyeOffset(head, target, this.screen);
+                  else offset = { x: 0, y: 0, z: 0 };
+                }
+              }
+            }
             const eye = mapTrackedEye(head, offset, this.distance, this.tuning);
+            this.updateStatus('tracking');
             this.filters.forEach(f => f.setCutoff(this.tuning.response));
-            this.onPosition({ x: this.filters[0].filter(eye.x, observation.time / 1000), y: this.filters[1].filter(eye.y, observation.time / 1000), z: this.filters[2].filter(eye.z, observation.time / 1000) }, data.inferenceMs, solution?.gaze, { measured: head.z, neutral: this.distance });
+            this.onPosition({ x: this.filters[0].filter(eye.x, observation.time / 1000), y: this.filters[1].filter(eye.y, observation.time / 1000), z: this.filters[2].filter(eye.z, observation.time / 1000) }, data.inferenceMs, solution?.gaze, { measured: head.z, neutral: this.distance, method: metric ? 'metric' : 'legacy', errorPx: metric?.errorPx, calibrated: !!this.profile });
           }
         }
       };
@@ -92,6 +126,8 @@ export class HeadTracker {
     if (recent.some(v => Math.hypot(v.x - baseline.x, v.y - baseline.y) > baseline.span * 0.06 || Math.abs(v.span / baseline.span - 1) > 0.04)) return false;
     this.baseline = baseline;
     this.eyeModel = lockEyeModel(baseline, this.ipd);
+    this.metricModel = lockMetricFace(baseline, this.distance, this.ipd) ?? undefined;
+    this.clearGazeProfile();
     this.filters.forEach(f => f.reset()); this.updateStatus('tracking'); return true;
   }
   stop() {
@@ -100,7 +136,7 @@ export class HeadTracker {
     this.worker?.terminate(); this.worker = undefined;
     this.stream?.getTracks().forEach(t => t.stop()); this.stream = undefined;
     this.video.pause(); this.video.srcObject = null;
-    this.busy = false; this.lastTime = -1; this.baseline = undefined; this.eyeModel = undefined; this.recent = []; this.lastFace = 0;
+    this.busy = false; this.lastTime = -1; this.baseline = undefined; this.eyeModel = undefined; this.metricModel = undefined; this.recent = []; this.lastFace = 0; this.clearGazeProfile();
     this.filters.forEach(f => f.reset()); this.updateStatus('off');
   }
   private fail(message: string) { this.stop(); this.onError(message); }

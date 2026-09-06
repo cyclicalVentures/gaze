@@ -1,5 +1,6 @@
 import { PerspectiveCamera } from 'three';
 import type { HeadFrame } from './eye-model';
+import type { Vec3 } from './eye-model';
 export type EyePosition = { x: number; y: number; z: number };
 /** Screen is the XY plane at z=0; content is behind it (negative Z). All units are meters. */
 export function applyOffAxis(camera: PerspectiveCamera, eye: EyePosition, width: number, height: number) {
@@ -35,7 +36,7 @@ export class OneEuroFilter {
     this.raw = value; this.time = seconds; return this.value;
   }
 }
-export type EyeObservation = { x: number; y: number; span: number; left: { x: number; y: number; z?: number }; right: { x: number; y: number; z?: number }; head?: HeadFrame; time: number; imageWidth?: number; imageHeight?: number };
+export type EyeObservation = { x: number; y: number; span: number; left: { x: number; y: number; z?: number }; right: { x: number; y: number; z?: number }; head?: HeadFrame; face?: Vec3[]; time: number; imageWidth?: number; imageHeight?: number };
 export function estimateEye(observation: EyeObservation, baseline: EyeObservation, distance: number, ipd: number, eye: 'center' | 'left' | 'right' = 'center'): EyePosition {
   if (observation.span <= 0 || baseline.span <= 0 || distance <= 0 || ipd <= 0) throw new Error('Invalid eye calibration.');
   const z = Math.max(0.15, Math.min(1.5, distance * baseline.span / observation.span));

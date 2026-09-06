@@ -4,6 +4,8 @@ import { HeadTracker, type DepthReading, type TrackingStatus } from '../lib/view
 import type { EyePosition } from '../lib/viewer/projection';
 import type { EyeObservation } from '../lib/viewer/projection';
 import type { GazeReading } from '../lib/viewer/eye-model';
+import { geometryLandmarks } from '../lib/viewer/metric-face';
+import type { GazeProfile, GazeSample } from '../lib/viewer/gaze-calibration';
 
 function environment(t: TestContext) {
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -103,4 +105,30 @@ void test('centering rejects moving samples instead of freezing an unstable eye 
     worker.emit({ type: 'result', observation: { x: 320 + i * 5, y: 200, span: 63, left: { x: 351.5 + i * 5, y: 200 }, right: { x: 288.5 + i * 5, y: 200 }, time: env.clock.now }, inferenceMs: 10 });
   }
   assert.equal(env.tracker.calibrate(), false); assert.equal(env.statuses.at(-1), 'ready');
+});
+void test('live metric fit uses facial reprojection, preserves approach direction and allows legacy comparison', async t => {
+  const env=environment(t);await env.tracker.start();const worker=env.WorkerMock.instances[0];worker.emit({type:'ready'});
+  const baseline:EyeObservation={x:320,y:200,span:63,left:{x:351.5,y:200,z:-12},right:{x:288.5,y:200,z:-12},head:{origin:{x:320,y:240,z:0},axes:[{x:1,y:0,z:0},{x:0,y:1,z:0},{x:0,y:0,z:1}],scale:24},face:geometryLandmarks.map((_,i)=>({x:320+(i%3-1)*40,y:200+(Math.floor(i/3)-4)*12,z:-12})),imageWidth:640,imageHeight:480,time:0};
+  const emit=(observation:EyeObservation)=>{env.clock.now+=33;worker.emit({type:'result',observation:{...observation,time:env.clock.now},inferenceMs:10});};
+  for(let i=0;i<6;i++) emit(baseline);assert.equal(env.tracker.calibrate(),true);
+  const near={...baseline,face:baseline.face!.map(p=>({...p,x:320+(p.x-320)*1.25,y:240+(p.y-240)*1.25}))};
+  for(let i=0;i<60;i++) emit(near);
+  assert.equal(env.depth.at(-1)!.method,'metric');assert.ok(Math.abs(env.depth.at(-1)!.measured-.44)<1e-6);assert.ok(Math.abs(env.positions.at(-1)!.z-.66)<1e-5);
+  env.tracker.setGeometryMode('legacy');emit(near);
+  assert.equal(env.depth.at(-1)!.method,'legacy');assert.ok(Math.abs(env.depth.at(-1)!.measured-.55)<1e-6);
+});
+void test('gaze profiles apply to rendering, subscriptions detach, and stale sessions cannot apply after reset',async t=>{
+  const env=environment(t);await env.tracker.start();const worker=env.WorkerMock.instances[0];worker.emit({type:'ready'});
+  const baseline:EyeObservation={x:320,y:200,span:63,left:{x:351.5,y:200,z:-12},right:{x:288.5,y:200,z:-12},head:{origin:{x:320,y:240,z:0},axes:[{x:1,y:0,z:0},{x:0,y:1,z:0},{x:0,y:0,z:1}],scale:24},imageWidth:640,imageHeight:480,time:0};
+  const emit=()=>{env.clock.now+=33;worker.emit({type:'result',observation:{...baseline,time:env.clock.now},inferenceMs:10});};
+  for(let i=0;i<6;i++) emit();assert.equal(env.tracker.calibrate(),true);
+  const screen={width:1200,height:800,metersPerPixel:.0003,center:{x:600,y:400}};env.tracker.setScreenGeometry(screen);
+  const samples:GazeSample[]=[],unsubscribe=env.tracker.subscribeGaze(s=>samples.push(s));emit();assert.equal(samples.length,1);
+  const revision=env.tracker.calibrationRevision,profile:GazeProfile={mean:{x:.5,y:.5},scale:{x:1,y:1},x:[.8,0,0,0,0,0],y:[.5,0,0,0,0,0],width:1200,height:800};
+  assert.equal(env.tracker.applyGazeProfile(profile,revision),true);emit();assert.ok(env.positions.at(-1)!.x>.001);assert.equal(env.depth.at(-1)!.calibrated,true);
+  unsubscribe();emit();assert.equal(samples.length,2);
+  env.tracker.setScreenGeometry({...screen,width:800});assert.equal(env.tracker.hasGazeProfile,false);assert.equal(env.tracker.applyGazeProfile(profile,revision),false);
+  env.tracker.setScreenGeometry(screen);assert.equal(env.tracker.applyGazeProfile(profile,env.tracker.calibrationRevision),true);
+  env.tracker.calibrate();assert.equal(env.tracker.hasGazeProfile,false);assert.equal(env.tracker.applyGazeProfile(profile,revision),false);
+  env.tracker.stop();assert.equal(env.tracker.applyGazeProfile(profile,env.tracker.calibrationRevision),false);
 });

@@ -61,3 +61,7 @@ An ordinary panel displays one image to both eyes. This implementation provides 
 ## Verification boundaries
 
 Automated tests cover off-axis invariants, head-local eye reconstruction under rigid rotation, iris-only gaze motion without head/depth drift, landmark/blink gating, calibration sweep isolation and freezing, settings validation, filtering, ASCII/binary PLY and the supplied binary USDZ geometry/material binding. The Node USDZ test stubs image load completion and verifies JPEG bytes; it does not validate GPU texture rendering. Camera lifecycle tests additionally simulate permission cancellation, denial, camera revocation, worker stalls, calibration and tracking loss/recovery. Hardware camera tracking, iOS Safari and Quick Look require physical-device testing. Optional WebMCP registration has no supported validation context in this environment and is not claimed as verified.
+
+## Metric reconstruction and known-target calibration
+
+The viewer now defaults to WebEyeTrack-style face reconstruction and radial refinement, with a robust 27-landmark XYZ reprojection fit. The original nose-scale method remains available under Physical calibration. A separate gaze calibration learns nine known targets, checks five unseen targets, and reports the error before applying the mapping. See [the calibration method and validation limits](gaze-calibration.md) and [WebEyeTrack attribution](../THIRD_PARTY_NOTICES.md).
