@@ -1,0 +1,37 @@
+# Gaze
+A local-first PLY/USDZ web viewer with head-coupled perspective: your screen acts as a fixed window into a 3D box. Built with React, Three.js and MediaPipe, using the Stridemind theme.
+
+## Run
+
+```sh
+npm install
+npm run dev -- --host 0.0.0.0
+npm run typecheck
+npm test
+npm run build
+```
+
+Camera access requires HTTPS or localhost. To use a phone, open the deployed HTTPS site; plain HTTP on a LAN IP will not enable its camera. Use modern Safari on iOS, Chrome/Edge/Safari/Firefox on desktop with WebGL 2 enabled.
+
+## Try it
+
+1. Start with the geometric cube. Enable **Pointer preview** for an immediate camera-free demonstration of the off-axis projection.
+2. Open **Physical calibration**. Enter the measured width of the visible browser page, viewing distance, and pupil distance if known. Defaults are estimates.
+3. Place the device on a stable surface, enable head tracking, center your eyes directly in front of the 3D viewport, and click **Set eye position**.
+4. Move gently side to side, up/down, closer/farther. Use **Recenter** after moving the screen/camera.
+5. Choose **USDZ test model** for the supplied Scaniverse model, or open/drop a `.ply` or `.usdz`. Use **Orbit** to inspect normally; Window remains physically anchored.
+
+Full view supports a CSS fallback on iOS. Camera access is opt-in and the stream is stopped on cancel, stop, backgrounding, page exit and mode changes. Face inference runs in a worker; its model and WASM are served from the same origin. No camera or imported model data is transmitted. The supplied demo is bundled as a site asset.
+
+## Scope
+
+- True asymmetric projection with a fixed physical screen plane, calibrated 3D eye midpoint, adaptive filtering, tracking loss handling, and pointer/touch/keyboard preview.
+- ASCII/binary PLY meshes and colored point clouds; ASCII/binary USD inside USDZ; embedded textures; fit/reset/zoom, wireframe and model orientation.
+- Single-view motion parallax, not binocular stereoscopy on an ordinary screen. The clarified VR requirement is the window effect, so no headset or WebXR is required.
+- Camera tracking is a monocular estimate, not a metric depth sensor. Gaussian splat attributes are not rendered as splats. Advanced USD composition/animation may need export as a static mesh.
+
+See [research and implementation notes](docs/research.md) for current papers, GitHub references, projection derivation and verification limits. Automated checks do not substitute for testing camera motion and Quick Look on physical iOS/desktop devices.
+
+## GitHub Pages
+
+The live app is published at https://cyclicalVentures.github.io/gaze/. The `pages.yml` workflow checks types and tests, builds with `npm run build:pages`, then deploys `dist/pages`. A dedicated static Vite entry renders the same app component without requiring a server on GitHub Pages. `NEXT_PUBLIC_BASE_PATH` defaults to `/gaze` for this build; set it to an empty string for a root-hosted static build.

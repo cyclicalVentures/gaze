@@ -1,0 +1,2 @@
+# Viewer
+Mode: Operate / Experience. Open immediately with the cube in a real off-axis 3D box. The supplied model is selectable. Orbit is a separate manual mode; Window uses head-coupled perspective. Camera setup uses neutral-pose calibration and clear cancel. Full view retains an exit. Errors preserve the last loaded model and permit retry. Tracking turns off when backgrounded. Model metadata comes from loaded geometry.
