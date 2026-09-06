@@ -2,6 +2,8 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { HeadTracker, type TrackingStatus } from '../lib/viewer/tracker';
 import type { EyePosition } from '../lib/viewer/projection';
+import type { EyeObservation } from '../lib/viewer/projection';
+import type { GazeReading } from '../lib/viewer/eye-model';
 
 function environment(t: TestContext) {
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -30,10 +32,10 @@ function environment(t: TestContext) {
   set('cancelAnimationFrame', (id: number) => callbacks.delete(id));
   set('createImageBitmap', async () => ({ width: 640, height: 480, close() {} }));
   const video = { srcObject: null, readyState: 2, currentTime: 1, paused: true, async play() { this.paused = false; }, pause() { this.paused = true; } };
-  const statuses: TrackingStatus[] = [], errors: string[] = [], positions: EyePosition[] = [];
-  const tracker = new HeadTracker(video as unknown as HTMLVideoElement, s => statuses.push(s), p => positions.push(p), e => errors.push(e));
+  const statuses: TrackingStatus[] = [], errors: string[] = [], positions: EyePosition[] = [], gaze: (GazeReading | undefined)[] = [];
+  const tracker = new HeadTracker(video as unknown as HTMLVideoElement, s => statuses.push(s), (p, _ms, g) => { positions.push(p); gaze.push(g); }, e => errors.push(e));
   t.after(() => { tracker.stop(); for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
-  return { tracker, video, tracks, stream, statuses, errors, positions, clock, callbacks, WorkerMock, setMedia: (fn: () => Promise<unknown>) => { getMedia = fn; } };
+  return { tracker, video, tracks, stream, statuses, errors, positions, gaze, clock, callbacks, WorkerMock, setMedia: (fn: () => Promise<unknown>) => { getMedia = fn; } };
 }
 
 void test('canceling while camera permission is pending stops the late stream', async t => {
@@ -74,4 +76,25 @@ void test('a stalled worker stops tracking instead of freezing indefinitely', as
   const env = environment(t); await env.tracker.start(); const worker = env.WorkerMock.instances[0]; worker.emit({ type: 'ready' });
   env.clock.now += 6000; const callback = [...env.callbacks.values()].at(-1)!; callback(env.clock.now);
   assert.equal(env.tracks[0].stopped, true); assert.match(env.errors[0], /stalled/);
+});
+void test('the live tracker uses locked eye spheres and applies eye tuning without restarting the camera', async t => {
+  const env = environment(t); await env.tracker.start(); const worker = env.WorkerMock.instances[0]; worker.emit({ type: 'ready' });
+  const observation: EyeObservation = { x: 320, y: 200, span: 63, left: { x: 351.5, y: 200, z: -12 }, right: { x: 288.5, y: 200, z: -12 }, head: { origin: { x: 320, y: 240, z: 0 }, axes: [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }], scale: 24 }, imageWidth: 640, imageHeight: 480, time: env.clock.now };
+  const emit = (o: EyeObservation) => { env.clock.now += 33; worker.emit({ type: 'result', observation: { ...o, time: env.clock.now }, inferenceMs: 10 }); };
+  for (let i = 0; i < 6; i++) emit(observation);
+  assert.equal(env.tracker.calibrate(), true);
+  const moved = { ...observation, x: 326, left: { ...observation.left, x: 357.5, z: -Math.sqrt(108) }, right: { ...observation.right, x: 294.5, z: -Math.sqrt(108) } };
+  emit(moved); assert.ok(Math.abs(env.positions.at(-1)!.x + 0.003) < 1e-8); assert.equal(env.gaze.at(-1)!.valid, true);
+  env.tracker.tuning = { ...env.tracker.tuning, eyeGain: 0 };
+  for (let i = 0; i < 100; i++) emit(moved);
+  assert.ok(Math.abs(env.positions.at(-1)!.x) < 1e-5); assert.ok(Math.abs(env.positions.at(-1)!.z - 0.55) < 1e-5);
+  assert.equal(env.WorkerMock.instances.length, 1); assert.equal(env.tracks[0].stopped, false);
+});
+void test('centering rejects moving samples instead of freezing an unstable eye model', async t => {
+  const env = environment(t); await env.tracker.start(); const worker = env.WorkerMock.instances[0]; worker.emit({ type: 'ready' });
+  for (let i = 0; i < 6; i++) {
+    env.clock.now += 33;
+    worker.emit({ type: 'result', observation: { x: 320 + i * 5, y: 200, span: 63, left: { x: 351.5 + i * 5, y: 200 }, right: { x: 288.5 + i * 5, y: 200 }, time: env.clock.now }, inferenceMs: 10 });
+  }
+  assert.equal(env.tracker.calibrate(), false); assert.equal(env.statuses.at(-1), 'ready');
 });
