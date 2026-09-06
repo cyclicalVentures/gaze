@@ -1,5 +1,13 @@
-export type ViewTuning = { lateralGain: number; depthGain: number; eyeGain: number; response: number; boxDepth: number };
-export const defaultTuning: ViewTuning = { lateralGain: 1, depthGain: 1, eyeGain: 1, response: 1.8, boxDepth: 28 };
+import type { EyePosition } from './projection';
+export type ViewTuning = { lateralGain: number; depthGain: number; depthDirection: 1 | -1; eyeGain: number; response: number; boxDepth: number };
+export const defaultTuning: ViewTuning = { lateralGain: 1, depthGain: 1, depthDirection: -1, eyeGain: 1, response: 1.8, boxDepth: 28 };
+/** Keep measured eye distance separate from the user's virtual movement mapping. */
+export function mapTrackedEye(head: EyePosition, offset: EyePosition, distance: number, tuning: ViewTuning): EyePosition {
+  const x = head.x * tuning.lateralGain + offset.x * tuning.eyeGain;
+  const y = head.y * tuning.lateralGain + offset.y * tuning.eyeGain;
+  const z = distance + (head.z - distance) * tuning.depthGain * tuning.depthDirection + offset.z * tuning.eyeGain;
+  return { x: Math.max(-0.45, Math.min(0.45, x)), y: Math.max(-0.35, Math.min(0.35, y)), z: Math.max(0.15, Math.min(1.5, z)) };
+}
 export const tuningSteps = [
   { key: 'lateralGain', title: 'Side-to-side movement', instruction: 'Move your head slowly left and right. Choose the strength that makes the object feel anchored inside the box.', min: 0.4, max: 2.4, step: 0.05, unit: '×' },
   { key: 'depthGain', title: 'Leaning in and out', instruction: 'Lean closer, then farther away. Choose the setting where the change in perspective feels natural.', min: 0.25, max: 2, step: 0.05, unit: '×' },
@@ -13,6 +21,7 @@ export function parseTuning(raw: string | null): ViewTuning {
     const data: unknown = JSON.parse(raw ?? 'null');
     if (!data || typeof data !== 'object') return { ...defaultTuning };
     const tuning = { ...defaultTuning };
+    if (Reflect.get(data, 'depthDirection') === 1) tuning.depthDirection = 1;
     for (const step of tuningSteps) {
       const value: unknown = Reflect.get(data, step.key);
       if (typeof value === 'number' && Number.isFinite(value) && value >= step.min && value <= step.max) tuning[step.key] = value;

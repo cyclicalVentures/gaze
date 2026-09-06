@@ -23,6 +23,8 @@ Camera access requires HTTPS or localhost. To use a phone, open the deployed HTT
 
 Full view supports a CSS fallback on iOS. Camera access is opt-in and the stream is stopped on cancel, stop, backgrounding, page exit and mode changes. Face inference runs in a worker; its model and WASM are served from the same origin. No camera or imported model data is transmitted. The supplied demo is bundled as a site asset.
 
+**View → Grow when closer** is enabled by default: leaning in enlarges the model on screen. Turn it off for physical window scaling. This changes virtual depth only and saves the preference. **Estimated screen distance** should fall when you lean closer; **View Z** includes your rendering settings. The physical window projection can shrink an object's pixel footprint as you approach. See the [depth explanation](docs/research.md) and [newer tracking implementation shortlist](docs/sota-tracking.md).
+
 ## Scope
 
 - True asymmetric projection with a fixed physical screen plane, calibrated head-local eye spheres and per-eye gaze directions, adaptive filtering, tracking loss handling, and pointer/touch/keyboard preview.

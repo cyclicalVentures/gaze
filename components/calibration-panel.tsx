@@ -26,12 +26,13 @@ export function CalibrationPanel({ initial, status, gazeValid, centering, onPrev
     <ol className="tuning-progress" aria-label="Calibration progress">{tuningSteps.map((s, i) => <li key={s.key} className={session.complete || i < session.index ? 'is-done' : i === session.index ? 'is-current' : ''} aria-current={!session.complete && i === session.index ? 'step' : undefined}><span className="sr-only">{s.title}: {session.complete || i < session.index ? 'chosen' : i === session.index ? 'current' : 'upcoming'}</span></li>)}</ol>
     {session.complete ? <>
       <h3>Try it all together.</h3><p className="tuning-instruction">Move your head and eyes around the model. Your choices are applied now.</p>
-      <dl className="tuning-summary">{tuningSteps.map(s => <div key={s.key}><dt>{s.title}</dt><dd>{session.values[s.key].toFixed(s.step < 1 ? 2 : 0)}{s.unit}</dd></div>)}</dl>
+      <dl className="tuning-summary"><div><dt>In / out direction</dt><dd>{session.values.depthDirection === -1 ? 'Grow when closer' : 'Physical window'}</dd></div>{tuningSteps.map(s => <div key={s.key}><dt>{s.title}</dt><dd>{session.values[s.key].toFixed(s.step < 1 ? 2 : 0)}{s.unit}</dd></div>)}</dl>
       <button className="button primary full-width" onClick={() => onSave(session.values)}><Check size={17}/>Save calibration</button>
       <p className="small-copy">Saves these settings in this browser. Recenter your eyes whenever you start the camera.</p>
     </> : <>
       <div className="tuning-step-title"><h3>{step.title}</h3><span>{session.index + 1} / {tuningSteps.length}</span></div>
       <p className="tuning-instruction">{step.instruction}</p>
+      {step.key === 'depthGain' && <p className="small-copy">Direction: {session.values.depthDirection === -1 ? 'grow when closer' : 'physical window'}. To change it, cancel and use “Grow when closer” under View.</p>}
       <div className="tuning-value"><output htmlFor="tuning-value" aria-live="off">{session.values[step.key].toFixed(step.step < 1 ? 2 : 0)}<span>{step.unit}</span></output><span aria-live="polite">{!available ? 'Waiting for eyes' : session.picked ? 'Choice held' : running ? 'Trying values…' : 'Paused'}</span></div>
       <label className="sr-only" htmlFor="tuning-value">Fine-tune {step.title.toLowerCase()}</label>
       <input id="tuning-value" className="tuning-range" type="range" min={step.min} max={step.max} step={step.step} value={session.values[step.key]} disabled={!available} onChange={e => dispatch({ type: 'adjust', value: Number(e.target.value) })}/>

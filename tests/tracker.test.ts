@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { HeadTracker, type TrackingStatus } from '../lib/viewer/tracker';
+import { HeadTracker, type DepthReading, type TrackingStatus } from '../lib/viewer/tracker';
 import type { EyePosition } from '../lib/viewer/projection';
 import type { EyeObservation } from '../lib/viewer/projection';
 import type { GazeReading } from '../lib/viewer/eye-model';
@@ -32,10 +32,10 @@ function environment(t: TestContext) {
   set('cancelAnimationFrame', (id: number) => callbacks.delete(id));
   set('createImageBitmap', async () => ({ width: 640, height: 480, close() {} }));
   const video = { srcObject: null, readyState: 2, currentTime: 1, paused: true, async play() { this.paused = false; }, pause() { this.paused = true; } };
-  const statuses: TrackingStatus[] = [], errors: string[] = [], positions: EyePosition[] = [], gaze: (GazeReading | undefined)[] = [];
-  const tracker = new HeadTracker(video as unknown as HTMLVideoElement, s => statuses.push(s), (p, _ms, g) => { positions.push(p); gaze.push(g); }, e => errors.push(e));
+  const statuses: TrackingStatus[] = [], errors: string[] = [], positions: EyePosition[] = [], gaze: (GazeReading | undefined)[] = [], depth: (DepthReading | undefined)[] = [];
+  const tracker = new HeadTracker(video as unknown as HTMLVideoElement, s => statuses.push(s), (p, _ms, g, d) => { positions.push(p); gaze.push(g); depth.push(d); }, e => errors.push(e));
   t.after(() => { tracker.stop(); for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
-  return { tracker, video, tracks, stream, statuses, errors, positions, gaze, clock, callbacks, WorkerMock, setMedia: (fn: () => Promise<unknown>) => { getMedia = fn; } };
+  return { tracker, video, tracks, stream, statuses, errors, positions, gaze, depth, clock, callbacks, WorkerMock, setMedia: (fn: () => Promise<unknown>) => { getMedia = fn; } };
 }
 
 void test('canceling while camera permission is pending stops the late stream', async t => {
@@ -88,6 +88,12 @@ void test('the live tracker uses locked eye spheres and applies eye tuning witho
   env.tracker.tuning = { ...env.tracker.tuning, eyeGain: 0 };
   for (let i = 0; i < 100; i++) emit(moved);
   assert.ok(Math.abs(env.positions.at(-1)!.x) < 1e-5); assert.ok(Math.abs(env.positions.at(-1)!.z - 0.55) < 1e-5);
+  env.tracker.tuning = { ...env.tracker.tuning, depthDirection: -1 };
+  const near = { ...observation, head: { ...observation.head!, scale: 30 } };
+  for (let i = 0; i < 100; i++) emit(near);
+  assert.ok(Math.abs(env.positions.at(-1)!.z - 0.66) < 1e-5);
+  assert.ok(Math.abs(env.depth.at(-1)!.measured - 0.44) < 1e-9, 'reversed view must not reverse the measured distance');
+  assert.equal(env.depth.at(-1)!.neutral, 0.55);
   assert.equal(env.WorkerMock.instances.length, 1); assert.equal(env.tracks[0].stopped, false);
 });
 void test('centering rejects moving samples instead of freezing an unstable eye model', async t => {

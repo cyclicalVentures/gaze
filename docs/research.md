@@ -3,6 +3,8 @@ Reviewed 6 September 2026. The requested effect is head-coupled perspective (oft
 
 ## Sources and decisions
 
+See the [newer implementation shortlist](sota-tracking.md) for WebEyeTrack, OpenSeeFace, MobileGaze, EyeTrax, RealEye Light Open, and the March 2026 EMC-Gaze preprint, with inspected source paths and a recommended evaluation order.
+
 - [JEOresearch/EyeTracker — Webcam3DTracker](https://github.com/JEOresearch/EyeTracker/tree/main/Webcam3DTracker). Inspected `MonitorTracking.py`: a nose-derived 3D head frame, scale-aware eye sphere offsets frozen at center calibration, per-eye iris-minus-sphere gaze vectors, and a combined gaze ray. This is the primary reference for the revised webcam model. Its README calls it a prototype. We adapted the head-local sphere method in TypeScript, with anatomical axes instead of PCA, explicit metric priors, confidence gating and off-axis rendering. [Attribution and MIT license](../THIRD_PARTY_NOTICES.md).
 - [JEOresearch/EyeTracker — 3DTracker](https://github.com/JEOresearch/EyeTracker/tree/main/3DTracker). Inspected the pupil ellipse, normal-line intersection and ray/sphere gaze reconstruction. This version targets close-up infrared eye cameras; its image segmentation is not used on our full-face RGB feed.
 
@@ -29,6 +31,10 @@ t = ( H/2 - ey) * n/ez
 ```
 
 Set an asymmetric perspective projection from these bounds, translate the camera to the eye position, and keep its orientation fixed. Do not call `lookAt` in Window mode. Tests project the four physical screen corners to the same NDC coordinates over multiple X/Y/Z eye positions and verify front/back parallax signs.
+
+For an object of width `S` at depth `D` behind the screen, its width on the physical screen is `S * ez / (ez + D)`. Leaning closer reduces its pixel width, even though its visual angle from the closer eye grows. This can feel like reverse zoom when judging only the pixels. The tracker estimates decreasing distance as observed face scale increases; synthetic forward-motion tests verify that sign, but do not verify a particular physical camera's behavior.
+
+The **Grow when closer** control negates the mapped head-depth displacement about the centered distance, leaving measured distance and lateral movement unchanged. This produces on-screen growth when approaching and is explicitly a perceptual preference, not physical head-coupled Z geometry. Both directions keep the screen plane fixed. The UI now displays **Estimated screen distance** separately from **View Z**, so camera-estimation errors can be distinguished from projection or tuning choices. Approach-growth is enabled by default, including for older saved settings without a direction preference. Turning it off restores the original physical direction; explicit preferences survive reload.
 
 ## Eye position and orientation
 

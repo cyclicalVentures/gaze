@@ -60,7 +60,7 @@ export default function Home() {
   const [ipd, setIpd] = useState(63);
   const [eye, setEye] = useState<'center' | 'left' | 'right'>('center');
   const [fps, setFps] = useState(0);
-  const [telemetry, setTelemetry] = useState({ x: 0, y: 0, z: 55, ms: 0 });
+  const [telemetry, setTelemetry] = useState({ x: 0, y: 0, z: 55, measured: 55, neutral: 55, ms: 0 });
   const [arAvailable, setArAvailable] = useState(false);
   const [arUrl, setArUrl] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -86,9 +86,9 @@ export default function Home() {
         tracker.current = new HeadTracker(video.current, s => {
           setStatus(s);
           if (engine.current) { engine.current.tracking = s === 'tracking' || s === 'lost'; if (s === 'off') engine.current.center(); }
-        }, (position, ms, reading) => {
+        }, (position, ms, reading, depthReading) => {
           engine.current?.setEye(position);
-          if (performance.now() - lastTelemetry > 180) { setTelemetry({ x: position.x * 100, y: position.y * 100, z: position.z * 100, ms }); setGaze(reading ?? null); lastTelemetry = performance.now(); }
+          if (performance.now() - lastTelemetry > 180) { setTelemetry({ x: position.x * 100, y: position.y * 100, z: position.z * 100, measured: (depthReading?.measured ?? position.z) * 100, neutral: (depthReading?.neutral ?? position.z) * 100, ms }); setGaze(reading ?? null); lastTelemetry = performance.now(); }
         }, setError);
         tracker.current.distance = mobile ? 0.4 : 0.55;
         ownedTracker = tracker.current;
@@ -119,6 +119,12 @@ export default function Home() {
     if (tracker.current) tracker.current.tuning = value;
     if (engine.current && Math.abs(engine.current.depth * 100 - value.boxDepth) > 0.001) engine.current.setDepth(value.boxDepth);
   }, []);
+  const reverseDepth = (reverse: boolean) => {
+    const next: ViewTuning = { ...tuning, depthDirection: reverse ? -1 : 1 };
+    applyTuning(next);
+    try { localStorage.setItem(tuningStorageKey, JSON.stringify(next)); }
+    catch { setNote('Depth direction applied for this visit. Your browser could not save it.'); }
+  };
   const closeTuning = (value: ViewTuning, save: boolean) => {
     applyTuning(value); setTuningOpen(false);
     if (save) {
@@ -238,7 +244,7 @@ export default function Home() {
           <button className={`button ${active ? 'secondary' : 'primary'} full-width`} disabled={!ready} onClick={active ? () => tracker.current?.stop() : startTracking}>{status === 'starting' ? <><X size={17}/>Cancel camera setup</> : active ? <><CameraOff size={17}/>Stop tracking</> : <><Camera size={17}/>Enable head tracking<ArrowUpRight size={17}/></>}</button>
           {active && status !== 'starting' && <button className="button teal-action full-width" onClick={recenter} disabled={status === 'lost' || centering !== null}><Crosshair size={17}/>{centering !== null ? 'Look at the target…' : tracking ? 'Recenter eye position' : 'Set eye position'}</button>}
           <span className="privacy"><ShieldCheck size={13}/> Camera and files stay on this device</span>
-          {tracking && <div className="tracking-data"><span>X <b>{telemetry.x.toFixed(1)}</b></span><span>Y <b>{telemetry.y.toFixed(1)}</b></span><span>Z <b>{telemetry.z.toFixed(0)}</b> cm</span></div>}
+          {tracking && <><div className="tracking-data"><span>X <b>{telemetry.x.toFixed(1)}</b></span><span>Y <b>{telemetry.y.toFixed(1)}</b></span><span>View Z <b>{telemetry.z.toFixed(0)}</b> cm</span></div><div className="depth-reading"><span>Estimated screen distance <b>{telemetry.measured.toFixed(0)} cm</b></span><span>{Math.abs(telemetry.measured - telemetry.neutral) < 1.5 ? 'At your centered distance' : `${telemetry.measured < telemetry.neutral ? 'Closer' : 'Farther'} by ${Math.abs(telemetry.measured - telemetry.neutral).toFixed(0)} cm`}</span></div></>}
           {tracking && gaze && <div className={`gaze-reading ${gaze.valid ? '' : 'is-uncertain'}`}><svg viewBox="0 0 100 38" aria-label="Estimated left and right eye orientation">{([gaze.right, gaze.left]).map((ray, i) => <g key={i} transform={`translate(${25 + i * 50} 19)`}><circle r="14"/><path d="M-18 0H18M0-18V18"/><line x1="0" y1="0" x2={-ray.x * 25} y2={ray.y * 25}/><circle className="iris-dot" cx={-ray.x * 12} cy={ray.y * 12} r="3"/></g>)}</svg><span>{gaze.valid ? <>Gaze estimate<br/><b>{gaze.yaw.toFixed(0)}° horizontal · {gaze.pitch.toFixed(0)}° vertical</b></> : 'Eye direction uncertain'}</span></div>}
           <button ref={tuneButton} className="button secondary full-width tune-entry" disabled={!tracking || centering !== null} onClick={() => { setNote(''); setTuningOpen(true); }}><SlidersHorizontal size={17}/>Guided calibration<ArrowUpRight size={17}/></button>
           <p className="calibration-hint">{tracking ? 'We vary each setting. You choose what looks best.' : 'Enable tracking and set your eye position to calibrate.'}</p>
@@ -247,6 +253,7 @@ export default function Home() {
           <div className="section-heading"><h2 id="view-title"><SlidersHorizontal size={17}/> View</h2></div>
           <ToggleGroup className="view-mode" aria-label="View mode" value={[mode]} onValueChange={values => { const value = values[0]; if (value === 'window' || value === 'orbit') changeMode(value); }}><ToggleGroupItem value="window" aria-label="Window view"><Maximize size={16}/>Window</ToggleGroupItem><ToggleGroupItem value="orbit" aria-label="Orbit view"><Move3D size={16}/>Orbit</ToggleGroupItem></ToggleGroup>
           {mode === 'window' && <div className="toggle-row"><label htmlFor="preview">Pointer preview</label><Switch id="preview" checked={preview} disabled={active} onCheckedChange={changePreview}/></div>}
+          {mode === 'window' && <><div className="toggle-row"><label htmlFor="reverse-depth">Grow when closer</label><Switch id="reverse-depth" checked={tuning.depthDirection === -1} onCheckedChange={reverseDepth}/></div><p className="calibration-hint depth-hint">{tuning.depthDirection === -1 ? 'Leaning closer enlarges the model on screen. Turn off for physical window scaling.' : 'Physical window scaling. Turn on if you want the model to grow on screen as you approach.'}</p></>}
           <div className="toggle-row"><label htmlFor="room">Depth box</label><Switch id="room" checked={room} onCheckedChange={v => { setRoom(v); engine.current?.setRoom(v); }}/></div>
           <div className="range-label"><span id="depth-label">Box depth</span><output>{depth} cm</output></div>
           <Slider aria-labelledby="depth-label" min={8} max={60} step={1} value={[depth]} onValueChange={v => { const n = Array.isArray(v) ? v[0] : v; applyTuning({ ...tuning, boxDepth: n }); }}/>

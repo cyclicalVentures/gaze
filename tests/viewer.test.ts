@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { Box3, PerspectiveCamera, Vector3 } from 'three';
 import { applyOffAxis, estimateEye, OneEuroFilter, type EyeObservation } from '../lib/viewer/projection';
 import { parseModel, disposeObject, validateFile } from '../lib/viewer/model';
+import { defaultTuning, mapTrackedEye } from '../lib/viewer/tuning';
 
 const close = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-8, `${a} != ${b}`);
 const arrayBuffer = (bytes: Uint8Array) => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -31,6 +32,23 @@ void test('near/far movement changes behind-screen size with the correct ratio',
   applyOffAxis(camera, { x: 0, y: 0, z: .6 }, .34, .22);
   const far = new Vector3(.1, 0, -.2).project(camera).x;
   close(near / far, (.3 / .5) / (.6 / .8));
+  // Fewer screen pixels when closer is correct for a fixed physical window:
+  // the screen itself subtends a larger angle, and the object's visual angle grows.
+  assert.ok(near < far);
+  assert.ok(Math.atan(near * .17 / .3) > Math.atan(far * .17 / .6));
+});
+void test('default approach response enlarges the cube on screen; physical window scaling remains selectable', () => {
+  const footprint = (distance: number, direction: 1 | -1) => {
+    const eye = mapTrackedEye({ x: 0, y: 0, z: distance }, { x: 0, y: 0, z: 0 }, 0.55, { ...defaultTuning, depthDirection: direction });
+    const camera = new PerspectiveCamera(); applyOffAxis(camera, eye, 0.34, 0.22);
+    close(new Vector3(0.17, 0.11, 0).project(camera).x, 1);
+    return new Vector3(0.05, 0, -0.2).project(camera).x;
+  };
+  assert.equal(defaultTuning.depthDirection, -1);
+  assert.ok(footprint(0.4, -1) > footprint(0.55, -1));
+  assert.ok(footprint(0.7, -1) < footprint(0.55, -1));
+  assert.ok(footprint(0.4, 1) < footprint(0.55, 1));
+  assert.ok(footprint(0.7, 1) > footprint(0.55, 1));
 });
 void test('rejects invalid projection geometry', () => {
   assert.throws(() => applyOffAxis(new PerspectiveCamera(), { x: 0, y: 0, z: 0 }, .3, .2));
