@@ -6,6 +6,7 @@ import type { EyeObservation } from '../lib/viewer/projection';
 import type { GazeReading } from '../lib/viewer/eye-model';
 import { geometryLandmarks } from '../lib/viewer/metric-face';
 import type { GazeProfile, GazeSample } from '../lib/viewer/gaze-calibration';
+import { calibrationFixture } from './fixtures/calibration';
 
 function environment(t: TestContext) {
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -13,7 +14,9 @@ function environment(t: TestContext) {
   const clock = { now: 1000 };
   t.mock.method(performance, 'now', () => clock.now);
   const callbacks = new Map<number, FrameRequestCallback>(); let frame = 0;
-  const tracks = [{ stopped: false, onended: null as (() => void) | null, stop() { this.stopped = true; } }];
+  const settings:MediaTrackSettings={deviceId:'camera-A',width:640,height:480,facingMode:'user'};
+  const requests:MediaStreamConstraints[]=[];
+  const tracks = [{ label:'Test webcam',getSettings:()=>settings,stopped: false, onended: null as (() => void) | null, stop() { this.stopped = true; } }];
   const stream = { getTracks: () => tracks, getVideoTracks: () => tracks };
   let getMedia: () => Promise<unknown> = async () => stream;
   class WorkerMock {
@@ -28,7 +31,7 @@ function environment(t: TestContext) {
     emit(data: unknown) { this.onmessage?.({ data }); }
   }
   set('window', { isSecureContext: true, location: { origin: 'https://example.test' }, setTimeout: globalThis.setTimeout });
-  set('navigator', { mediaDevices: { getUserMedia: () => getMedia() } });
+  set('navigator', { mediaDevices: { getUserMedia: (constraints:MediaStreamConstraints) => {requests.push(constraints);return getMedia();} } });
   set('Worker', WorkerMock);
   set('requestAnimationFrame', (callback: FrameRequestCallback) => { callbacks.set(++frame, callback); return frame; });
   set('cancelAnimationFrame', (id: number) => callbacks.delete(id));
@@ -37,7 +40,7 @@ function environment(t: TestContext) {
   const statuses: TrackingStatus[] = [], errors: string[] = [], positions: EyePosition[] = [], gaze: (GazeReading | undefined)[] = [], depth: (DepthReading | undefined)[] = [];
   const tracker = new HeadTracker(video as unknown as HTMLVideoElement, s => statuses.push(s), (p, _ms, g, d) => { positions.push(p); gaze.push(g); depth.push(d); }, e => errors.push(e));
   t.after(() => { tracker.stop(); for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
-  return { tracker, video, tracks, stream, statuses, errors, positions, gaze, depth, clock, callbacks, WorkerMock, setMedia: (fn: () => Promise<unknown>) => { getMedia = fn; } };
+  return { tracker, video, tracks, stream, statuses, errors, positions, gaze, depth, clock, callbacks, WorkerMock, settings, requests, setMedia: (fn: () => Promise<unknown>) => { getMedia = fn; } };
 }
 
 void test('canceling while camera permission is pending stops the late stream', async t => {
@@ -131,4 +134,43 @@ void test('gaze profiles apply to rendering, subscriptions detach, and stale ses
   env.tracker.setScreenGeometry(screen);assert.equal(env.tracker.applyGazeProfile(profile,env.tracker.calibrationRevision),true);
   env.tracker.calibrate();assert.equal(env.tracker.hasGazeProfile,false);assert.equal(env.tracker.applyGazeProfile(profile,revision),false);
   env.tracker.stop();assert.equal(env.tracker.applyGazeProfile(profile,env.tracker.calibrationRevision),false);
+});
+void test('a saved face reference and distance mappings restore after a full camera restart without recentering',async t=>{
+  const env=environment(t),{calibration}=calibrationFixture();
+  for(const layer of calibration.profile.layers!) layer.profile={...layer.profile,x:[.8,0,0,0,0,0]};
+  await env.tracker.start('camera-A');assert.deepEqual((env.requests[0].video as MediaTrackConstraints).deviceId,{exact:'camera-A'});
+  assert.equal(env.tracker.camera?.deviceId,'camera-A');assert.equal(env.tracker.restoreCalibration(calibration),true);
+  let worker=env.WorkerMock.instances.at(-1)!;worker.emit({type:'ready'});
+  const samples:GazeSample[]=[];env.tracker.subscribeGaze(s=>samples.push(s));
+  const emit=()=>{env.clock.now+=33;worker.emit({type:'result',observation:{...calibration.baseline,time:env.clock.now},inferenceMs:10});};
+  for(let i=0;i<60;i++) emit();
+  const before=env.positions.at(-1)!;assert.ok(before.x>.001);assert.equal(env.depth.at(-1)!.calibrated,true);
+  assert.ok(Math.abs(samples.at(-1)!.distance-.55)<1e-8);
+  const snapshot=JSON.parse(JSON.stringify(env.tracker.captureCalibration()));
+  env.tracker.stop();assert.equal(env.tracker.captureCalibration(),null);assert.equal(env.tracker.restoreCalibration(snapshot),false);
+  await env.tracker.start('camera-A');assert.equal(env.tracker.restoreCalibration(snapshot),true);
+  worker=env.WorkerMock.instances.at(-1)!;worker.emit({type:'ready'});
+  for(let i=0;i<60;i++) emit();
+  const after=env.positions.at(-1)!;assert.ok(Math.hypot(after.x-before.x,after.y-before.y,after.z-before.z)<1e-9);
+  assert.equal(env.errors.length,0);
+  const revision=env.tracker.calibrationRevision;
+  env.tracker.calibrate();assert.equal(env.tracker.hasGazeProfile,false);assert.equal(env.tracker.applyGazeProfile(snapshot.profile,revision),false);
+});
+void test('saved geometry rejects a different resolution and a resolution change during tracking releases the camera',async t=>{
+  const env=environment(t),{calibration}=calibrationFixture();await env.tracker.start();
+  env.settings.width=1280;assert.equal(env.tracker.restoreCalibration(calibration),false);
+  env.settings.width=640;assert.equal(env.tracker.restoreCalibration(calibration),true);
+  const worker=env.WorkerMock.instances.at(-1)!;worker.emit({type:'ready'});
+  worker.emit({type:'result',observation:{...calibration.baseline,imageWidth:1280,time:env.clock.now},inferenceMs:10});
+  assert.match(env.errors.at(-1)!,/resolution changed/);assert.equal(env.tracks[0].stopped,true);assert.equal(env.tracker.hasGazeProfile,false);
+});
+void test('live distance blending follows measured head depth while Grow when closer reverses only virtual depth',async t=>{
+  const env=environment(t),{calibration}=calibrationFixture();
+  calibration.profile.layers!.forEach((layer,i)=>{layer.profile={...layer.profile,x:[[.2,.5,.8][i],0,0,0,0,0]};});
+  await env.tracker.start();assert.equal(env.tracker.restoreCalibration(calibration),true);
+  const worker=env.WorkerMock.instances.at(-1)!;worker.emit({type:'ready'});
+  const near={...calibration.baseline,face:calibration.baseline.face!.map(p=>({...p,x:320+(p.x-320)*1.25,y:240+(p.y-240)*1.25}))};
+  for(let i=0;i<60;i++) {env.clock.now+=33;worker.emit({type:'result',observation:{...near,time:env.clock.now},inferenceMs:10});}
+  assert.ok(Math.abs(env.depth.at(-1)!.measured-.44)<1e-6);
+  assert.ok(env.positions.at(-1)!.z>.65);assert.ok(env.positions.at(-1)!.x<-.001,'near mapping should be selected despite reversed virtual depth');
 });

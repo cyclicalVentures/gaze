@@ -4,6 +4,7 @@ import { averageObservation, lockEyeModel, reconstructEyes, type EyeModel, type 
 import { defaultTuning, mapTrackedEye, type ViewTuning } from './tuning';
 import { lockMetricFace, fitMetricFace, type MetricFaceModel } from './metric-face';
 import { gazeSignal, predictGaze, calibratedEyeOffset, type GazeProfile, type GazeSample, type ScreenGeometry } from './gaze-calibration';
+import type { CalibrationSnapshot, CameraIdentity } from './calibration-storage';
 export type TrackingStatus = 'off' | 'starting' | 'ready' | 'tracking' | 'lost';
 export type GeometryMode = 'metric' | 'legacy';
 export type DepthReading = { measured: number; neutral: number; method: GeometryMode; errorPx?: number; calibrated: boolean };
@@ -35,6 +36,26 @@ export class HeadTracker {
   constructor(private video: HTMLVideoElement, private onStatus: (status: TrackingStatus) => void, private onPosition: (position: EyePosition, ms: number, gaze?: GazeReading, depth?: DepthReading) => void, private onError: (message: string) => void) {}
   get calibrationRevision() { return this.revision; }
   get hasGazeProfile() { return !!this.profile; }
+  get camera(): CameraIdentity | null {
+    const track=this.stream?.getVideoTracks()[0];
+    if (!track) return null;
+    const settings=track.getSettings() as MediaTrackSettings & {zoom?:number;resizeMode?:string};
+    return {deviceId:settings.deviceId ?? '',label:track.label || 'Current webcam',width:settings.width ?? this.video.videoWidth,height:settings.height ?? this.video.videoHeight,facingMode:settings.facingMode ?? '',zoom:settings.zoom,resizeMode:settings.resizeMode ?? ''};
+  }
+  captureCalibration(): CalibrationSnapshot | null {
+    if (!this.baseline || !this.profile || !this.screen) return null;
+    return structuredClone({baseline:this.baseline,profile:this.profile,screen:this.screen,distance:this.distance,ipd:this.ipd,eye:this.eye,geometryMode:this.geometryMode});
+  }
+  restoreCalibration(saved: CalibrationSnapshot) {
+    const camera=this.camera;
+    if (!this.worker || !camera || camera.width!==saved.baseline.imageWidth || camera.height!==saved.baseline.imageHeight) return false;
+    const eyeModel=lockEyeModel(saved.baseline,saved.ipd), metricModel=lockMetricFace(saved.baseline,saved.distance,saved.ipd);
+    if (!eyeModel || (saved.geometryMode==='metric' && !metricModel)) return false;
+    this.clearGazeProfile(); this.baseline=structuredClone(saved.baseline); this.eyeModel=eyeModel; this.metricModel=metricModel ?? undefined;
+    this.distance=saved.distance; this.ipd=saved.ipd; this.eye=saved.eye; this.geometryMode=saved.geometryMode;
+    this.screen=structuredClone(saved.screen); this.profile=structuredClone(saved.profile); this.filters.forEach(f=>f.reset());
+    return true;
+  }
   subscribeGaze(listener: (sample: GazeSample) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   clearGazeProfile() { this.profile = undefined; ++this.revision; }
   setScreenGeometry(screen: ScreenGeometry) { this.screen = screen; this.clearGazeProfile(); }
@@ -44,12 +65,12 @@ export class HeadTracker {
     this.profile = profile; this.filters.forEach(f => f.reset()); return true;
   }
   private updateStatus(status: TrackingStatus) { if (this.status !== status) { this.status = status; this.onStatus(status); } }
-  async start() {
+  async start(deviceId?: string) {
     this.stop(); const generation = ++this.generation;
     this.updateStatus('starting');
     try {
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Camera tracking needs HTTPS or localhost. Open the secure app link in Safari or Chrome.');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } } });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...(deviceId ? {deviceId:{exact:deviceId}} : {facingMode:'user'}), width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } } });
       if (generation !== this.generation) { stream.getTracks().forEach(t => t.stop()); return; }
       this.stream = stream;
       for (const track of stream.getVideoTracks()) track.onended = () => {
@@ -73,6 +94,7 @@ export class HeadTracker {
           this.recent = this.recent.filter(v => observation.time - v.time < 700);
           if (!this.baseline) this.updateStatus('ready');
           if (this.baseline) {
+            if (observation.imageWidth!==this.baseline.imageWidth || observation.imageHeight!==this.baseline.imageHeight) { this.fail('Camera resolution changed. Start tracking and recalibrate for the new camera settings.'); return; }
             const solution = this.eyeModel ? reconstructEyes(observation, this.eyeModel, this.distance, this.ipd, this.eye) : null;
             if (this.eyeModel && !solution) { this.updateStatus('lost'); return; }
             const metric = this.geometryMode === 'metric' && this.metricModel ? fitMetricFace(observation, this.metricModel, this.eye) : null;
@@ -82,9 +104,9 @@ export class HeadTracker {
             if (solution && this.screen) {
               const signal = gazeSignal(head, solution.gaze, this.screen);
               if (signal) {
-                for (const listener of this.listeners) listener({ time: observation.time, signal, revision: this.revision });
+                for (const listener of this.listeners) listener({ time: observation.time, signal, distance: head.z, revision: this.revision });
                 if (this.profile) {
-                  const target = predictGaze(this.profile, signal);
+                  const target = predictGaze(this.profile, signal, head.z);
                   // Avoid unstable extrapolation outside the calibrated screen.
                   if (Number.isFinite(target.x + target.y) && target.x >= -.25 && target.x <= 1.25 && target.y >= -.25 && target.y <= 1.25) offset = calibratedEyeOffset(head, target, this.screen);
                   else offset = { x: 0, y: 0, z: 0 };
@@ -102,7 +124,7 @@ export class HeadTracker {
     } catch (error) {
       if (generation !== this.generation) return;
       const name = (error as Error).name;
-      this.fail(name === 'NotAllowedError' ? 'Camera access was declined. Allow camera access in browser settings, then try again.' : name === 'NotFoundError' ? 'No camera was found. Connect a webcam or use pointer preview.' : (error as Error).message || 'Camera unavailable. Close other camera apps and try again.');
+      this.fail(name === 'NotAllowedError' ? 'Camera access was declined. Allow camera access in browser settings, then try again.' : name === 'OverconstrainedError' ? 'The selected webcam is unavailable. Choose another camera or the default front camera.' : name === 'NotFoundError' ? 'No camera was found. Connect a webcam or use pointer preview.' : (error as Error).message || 'Camera unavailable. Close other camera apps and try again.');
     }
   }
   private loop = () => {

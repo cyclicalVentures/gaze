@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FixationCollector, calibratedEyeOffset, fitGazeProfile, gazeSignal, predictGaze, trainingTargets, validationTargets, validateGaze, type Point, type TargetSamples } from '../lib/viewer/gaze-calibration';
 const signal=(p:Point)=>({x:p.x*.6+p.y*.1+.15,y:p.y*.7-p.x*.08+.1});
-const rows=(targets:Point[]):TargetSamples[]=>targets.map(target=>({target,samples:Array.from({length:25},(_,i)=>({time:1000+i*33,revision:1,signal:signal(target)}))}));
+const rows=(targets:Point[]):TargetSamples[]=>targets.map(target=>({target,samples:Array.from({length:25},(_,i)=>({time:1000+i*33,revision:1,distance:.55,signal:signal(target)}))}));
 void test('personal gaze mapping predicts unseen targets with an affine sensor bias',()=>{
   const profile=fitGazeProfile(rows(trainingTargets),1200,800)!;
   assert.ok(profile);
@@ -24,7 +24,7 @@ void test('calibration rejects constant gaze, insufficient samples and nonfinite
   const bad=rows(trainingTargets);bad[1].samples[0].signal.x=NaN;assert.equal(fitGazeProfile(bad,1200,800),null);
 });
 void test('fixation collector ignores duplicate frames, waits for settling and restarts after a blink',()=>{
-  const collector=new FixationCollector(),frame=(time:number)=>({time,revision:1,signal:{x:.5,y:.5}});
+  const collector=new FixationCollector(),frame=(time:number)=>({time,revision:1,distance:.55,signal:{x:.5,y:.5}});
   for(let i=0;i<25;i++) assert.equal(collector.push(frame(1000+i*33)).samples,null);
   for(let i=0;i<100;i++) assert.equal(collector.push(frame(1792)).samples,null);
   assert.equal(collector.push(frame(2400)).progress,0);

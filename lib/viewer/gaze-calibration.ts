@@ -4,9 +4,10 @@ import { median, solveLinear } from './linear';
 
 export type Point = { x: number; y: number };
 export type ScreenGeometry = { width: number; height: number; metersPerPixel: number; center: Point };
-export type GazeSample = { time: number; signal: Point; revision: number };
+export type GazeSample = { time: number; signal: Point; distance: number; revision: number };
 export type TargetSamples = { target: Point; samples: GazeSample[] };
-export type GazeProfile = { mean: Point; scale: Point; x: number[]; y: number[]; width: number; height: number };
+export type GazePlane = { mean: Point; scale: Point; x: number[]; y: number[]; width: number; height: number };
+export type GazeProfile = GazePlane & { layers?: { distance: number; profile: GazePlane }[] };
 export type GazeValidation = { meanPx: number; p95Px: number; worstTargetPx: number; targets: { target: Point; predicted: Point; errorPx: number }[]; samples: number; usable: boolean };
 export const trainingTargets: Point[] = [[.5,.5],[.12,.12],[.5,.12],[.88,.12],[.88,.5],[.88,.88],[.5,.88],[.12,.88],[.12,.5]].map(([x,y]) => ({x,y}));
 export const validationTargets: Point[] = [[.3,.3],[.7,.3],[.7,.7],[.3,.7],[.6,.45]].map(([x,y]) => ({x,y}));
@@ -38,15 +39,30 @@ export function fitGazeProfile(training: TargetSamples[], width: number, height:
   const x=solve('x'),y=solve('y');
   return x && y ? {mean,scale,x,y,width,height} : null;
 }
-export function predictGaze(profile: GazeProfile, signal: Point): Point {
+function predictPlane(profile: GazePlane, signal: Point): Point {
   const row=terms(signal,profile.mean,profile.scale), predict=(weights:number[])=>weights.reduce((s,w,i)=>s+w*row[i],0);
   return {x:predict(profile.x),y:predict(profile.y)};
+}
+/** Interpolate predictions between measured distance anchors; never extrapolate depth. */
+export function predictGaze(profile: GazeProfile, signal: Point, distance?: number): Point {
+  const layers=profile.layers;
+  if (!layers || !Number.isFinite(distance)) return predictPlane(profile,signal);
+  const upper=layers.findIndex(layer=>layer.distance>=distance!);
+  if (upper===0 || upper===-1) return predictPlane(layers[upper===0 ? 0 : layers.length-1].profile,signal);
+  const a=layers[upper-1], b=layers[upper], weight=(distance!-a.distance)/(b.distance-a.distance);
+  const pa=predictPlane(a.profile,signal),pb=predictPlane(b.profile,signal);
+  return {x:pa.x+(pb.x-pa.x)*weight,y:pa.y+(pb.y-pa.y)*weight};
+}
+export function combineDistanceProfiles(layers: NonNullable<GazeProfile['layers']>): GazeProfile | null {
+  const sorted=[...layers].sort((a,b)=>a.distance-b.distance);
+  if (sorted.length!==3 || sorted.some((l,i)=>!Number.isFinite(l.distance) || l.distance<.15 || l.distance>1.5 || (i>0 && l.distance-sorted[i-1].distance<.055) || l.profile.width!==sorted[0].profile.width || l.profile.height!==sorted[0].profile.height)) return null;
+  return {...sorted[1].profile,layers:sorted};
 }
 export function validateGaze(profile: GazeProfile, heldOut: TargetSamples[]): GazeValidation {
   const errors:number[]=[];
   const distance=(a:Point,b:Point)=>Math.hypot((a.x-b.x)*profile.width,(a.y-b.y)*profile.height);
   const targets=heldOut.map(t=>{
-    const predictions=t.samples.map(s=>predictGaze(profile,s.signal));
+    const predictions=t.samples.map(s=>predictGaze(profile,s.signal,s.distance));
     errors.push(...predictions.map(p=>distance(p,t.target)));
     const predicted=average(predictions); return {target:t.target,predicted,errorPx:distance(predicted,t.target)};
   });
