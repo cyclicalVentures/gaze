@@ -42,3 +42,12 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+## MediaPipe Hand Landmarker
+
+Hand tracking uses @mediapipe/tasks-vision and the unmodified Google MediaPipe Hand Landmarker float16 model bundle, version 1 (hand_detector.tflite and hand_landmarks_detector.tflite).
+
+Source: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+Documentation: https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker/web_js
+Reference worker: https://github.com/google-ai-edge/mediapipe-samples-web/blob/main/src/workers/hand-landmarker.worker.ts
+
+MediaPipe is Copyright The MediaPipe Authors, licensed under Apache License 2.0. A copy ships in public/mediapipe-license.txt. The app's pinch-clutch, hand association, gesture mapping, transform handling and shared-camera lifecycle code are original implementation code.

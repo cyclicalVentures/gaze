@@ -25,6 +25,16 @@ Full view supports a CSS fallback on iOS. Camera access is opt-in and the stream
 
 **View → Grow when closer** is enabled by default: leaning in enlarges the model on screen. Turn it off for physical window scaling. This changes virtual depth only and saves the preference. **Estimated screen distance** should fall when you lean closer; **View Z** includes your rendering settings. The physical window projection can shrink an object's pixel footprint as you approach. See the [depth explanation](docs/research.md) and [newer tracking implementation shortlist](docs/sota-tracking.md).
 
+## Hand controls
+
+Turn on **Hand controls** beneath the camera preview. It uses the same selected webcam; eye calibration is optional for hand manipulation.
+
+- Show an open hand, then pinch thumb and index finger and drag to rotate.
+- Pinch with both hands. Move them apart/together to enlarge/shrink, or twist to roll the model.
+- Release to hold. **Reset model size & rotation** returns the current model to its starting transform.
+
+The live markers show each detected pinch position. Hold the device still and keep hands below your face. Hand input pauses during centering, gaze calibration, depth tuning and model loading. Detection loss or a large jump releases the gesture; open your hand and pinch again. The same gestures work with the cube, PLY and USDZ models. Turning hand controls off keeps eye tracking active.
+
 ## Scope
 
 - True asymmetric projection with a fixed physical screen plane, calibrated head-local eye spheres and per-eye gaze directions, adaptive filtering, tracking loss handling, and pointer/touch/keyboard preview.

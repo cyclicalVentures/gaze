@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { applyOffAxis, type EyePosition } from './projection';
 import { disposeObject, parseModel, type ModelInfo } from './model';
+import { applyModelGesture } from './model-transform';
+import type { GestureDelta } from './hand-gestures';
 
 export class ViewerEngine {
   readonly renderer: THREE.WebGLRenderer;
@@ -94,7 +96,9 @@ export class ViewerEngine {
     this.model.traverse(o => { if (o instanceof THREE.Mesh) for (const m of Array.isArray(o.material) ? o.material : [o.material]) if ('wireframe' in m) (m as THREE.MeshStandardMaterial).wireframe = wire; });
   }
   scaleBy(factor: number) { this.zoom = THREE.MathUtils.clamp(this.zoom * factor, 0.2, 2.5); this.layoutModel(); }
-  rotateModel(axis: 'x' | 'y' | 'z') { this.modelContent?.rotateOnWorldAxis(new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0), Math.PI / 2); }
+  rotateModel(axis: 'x' | 'y' | 'z') { this.model.rotateOnWorldAxis(new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0), Math.PI / 2); }
+  applyHandGesture(delta:GestureDelta) { this.zoom=applyModelGesture(this.model,this.zoom,delta,this.camera.quaternion);this.layoutModel(); }
+  resetModelTransform() {this.model.quaternion.identity();this.zoom=1;this.layoutModel();}
   showCube(): ModelInfo {
     ++this.loadId;
     const root = new THREE.Group();
@@ -120,7 +124,7 @@ export class ViewerEngine {
       if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; }
       if (o instanceof THREE.Points && o.material instanceof THREE.PointsMaterial) o.material.size = 0.0012;
     });
-    this.zoom = 1; this.layoutModel(); this.setWireframe(this.wireframe);
+    this.resetModelTransform(); this.setWireframe(this.wireframe);
   }
   private layoutModel() {
     const fit = Math.min(this.width, this.height, this.depth * 1.35) * 0.85;

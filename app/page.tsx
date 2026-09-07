@@ -1,7 +1,7 @@
 'use client';
 /* oxlint-disable next/no-img-element -- Quick Look needs an img child; the AR link uses a tiny local SVG. */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Box, Camera, CameraOff, Check, Crosshair, Expand, Eye, FileBox, FolderOpen, Info, LoaderCircle, Maximize, Minus, Move3D, Plus, ScanFace, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowUpRight, Box, Camera, CameraOff, Check, Crosshair, Expand, Eye, FileBox, FolderOpen, Hand, Info, LoaderCircle, Maximize, Minus, Move3D, Plus, RotateCcw, ScanFace, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -18,6 +18,8 @@ import { GazeCalibration } from '@/components/gaze-calibration';
 import type { GeometryMode } from '@/lib/viewer/tracker';
 import { calibrationMismatch, cameraPreferenceKey, currentDisplay, forgetCalibration, loadCalibration, saveCalibration, type CameraIdentity, type SavedCalibration } from '@/lib/viewer/calibration-storage';
 import type { DistanceResult } from '@/lib/viewer/distance-calibration';
+import type { HandTracker, HandStatus } from '@/lib/viewer/hand-tracker';
+import type { HandFeedback } from '@/lib/viewer/hand-gestures';
 
 const cubeInfo: ModelInfo = { name: 'Depth cube', bytes: 0, format: 'PLY', vertices: 24, triangles: 12, meshes: 1, points: false, textures: 0 };
 const formatNumber = (n: number) => new Intl.NumberFormat('en', { notation: n > 99999 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(n);
@@ -37,6 +39,7 @@ export default function Home() {
   const video = useRef<HTMLVideoElement>(null);
   const engine = useRef<ViewerEngine | null>(null);
   const tracker = useRef<HeadTracker | null>(null);
+  const handTracker=useRef<HandTracker|null>(null);
   const input = useRef<HTMLInputElement>(null);
   const objectUrl = useRef<string | null>(null);
   const operation = useRef(0);
@@ -62,6 +65,10 @@ export default function Home() {
   const [gazeCalibrated, setGazeCalibrated] = useState(false);
   const [geometryMode, setGeometryMode] = useState<GeometryMode>('metric');
   const [faceFit, setFaceFit] = useState<number | null>(null);
+  const [handsEnabled,setHandsEnabled]=useState(false);
+  const [handStatus,setHandStatus]=useState<HandStatus>('off');
+  const [handError,setHandError]=useState('');
+  const [handFeedback,setHandFeedback]=useState<HandFeedback>({mode:'searching',points:[]});
   const [cameras,setCameras]=useState<{deviceId:string;label:string}[]>([]);
   const [selectedCamera,setSelectedCamera]=useState('');
   const [connectedCamera,setConnectedCamera]=useState<CameraIdentity|null>(null);
@@ -81,6 +88,9 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const active = status !== 'off';
   const tracking = status === 'tracking';
+  const cameraRunning=active && status!=='starting';
+  const handsPaused=!!gazeCalibrationTracker || tuningOpen || centering!==null || !!loading;
+  const handMessage=!cameraRunning ? status==='starting' ? 'Waiting for the camera…' : 'Enable the camera to use hand controls.' : handsPaused ? 'Hand controls paused during calibration or model loading.' : handStatus==='starting' ? 'Loading hand tracking…' : handStatus==='error' ? handError : ({searching:'Show an open hand to the camera.',release:'Release your pinch, then pinch again.',idle:'Pinch thumb and index finger to grab.',arming:'Hold the pinch…',rotate:'Rotating · Release to hold',scale:'Scaling & twisting · Release to hold'}[handFeedback.mode]);
   const statusLabel = { off: 'Camera off', starting: 'Starting camera…', ready: 'Ready to center', tracking: 'Tracking eyes', lost: 'Eyes not visible' }[status];
 
   useEffect(() => {
@@ -88,9 +98,10 @@ export default function Home() {
     let canceled = false;
     let ownedEngine: ViewerEngine | undefined;
     let ownedTracker: HeadTracker | undefined;
+    let ownedHandTracker: HandTracker | undefined;
     let lastTelemetry = 0;
     const mobile = window.innerWidth < 700;
-    Promise.all([import('@/lib/viewer/engine'), import('@/lib/viewer/tracker')]).then(([{ ViewerEngine }, { HeadTracker }]) => {
+    Promise.all([import('@/lib/viewer/engine'), import('@/lib/viewer/tracker'),import('@/lib/viewer/hand-tracker')]).then(([{ ViewerEngine }, { HeadTracker },{HandTracker}]) => {
       if (canceled || !canvasHost.current || !video.current) return;
       if (mobile) { setScreenWidth(7); setDistance(40); }
       const ar = document.createElement('a'); setArAvailable(ar.relList?.supports?.('ar') ?? false);
@@ -98,8 +109,14 @@ export default function Home() {
         engine.current = new ViewerEngine(canvasHost.current, setFps, setError);
         ownedEngine = engine.current;
         engine.current.distance = mobile ? 0.4 : 0.55; engine.current.center();
+        handTracker.current=new HandTracker(video.current,setHandStatus,result=>{
+          if (result.delta) engine.current?.applyHandGesture(result.delta);
+          setHandFeedback({mode:result.mode,points:result.points});
+        },setHandError);
+        ownedHandTracker=handTracker.current;
         tracker.current = new HeadTracker(video.current, s => {
           setStatus(s);
+          if (s==='off' || s==='starting') handTracker.current?.stop();
           if (s === 'off') { setGazeCalibrated(false); setFaceFit(null); setConnectedCamera(null); setSavedMessage(''); }
           if (engine.current) { engine.current.tracking = s === 'tracking' || s === 'lost'; if (s === 'off') engine.current.center(); }
         }, (position, ms, reading, depthReading) => {
@@ -125,13 +142,21 @@ export default function Home() {
     return () => {
       // oxlint-disable-next-line react-hooks/exhaustive-deps -- Invalidate the current async operation counter; this is not a DOM ref.
       canceled = true; alive.current = false; ++operation.current;
-      ownedTracker?.stop(); ownedEngine?.dispose(); engine.current = null;
+      ownedHandTracker?.stop();handTracker.current=null;ownedTracker?.stop(); ownedEngine?.dispose(); engine.current = null;
       // oxlint-disable-next-line react-hooks/exhaustive-deps -- Release the latest local file URL, not the initial URL.
       if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
       document.removeEventListener('visibilitychange', pause); window.removeEventListener('pagehide', pageHide); window.removeEventListener('orientationchange', orientation); document.removeEventListener('fullscreenchange', fullscreen); window.removeEventListener('keydown', escape);
       window.removeEventListener('resize', resize); window.visualViewport?.removeEventListener('resize', resize);
     };
   }, []);
+
+  useEffect(()=>{
+    const hands=handTracker.current;
+    if (!ready || !hands) return;
+    if (handsEnabled && cameraRunning) hands.start(); else hands.stop();
+    return ()=>hands.stop();
+  },[handsEnabled,cameraRunning,ready]);
+  useEffect(()=>{handTracker.current?.setPaused(handsPaused);},[handsPaused,ready]);
 
   useEffect(()=>{
     let canceled=false;
@@ -212,6 +237,7 @@ export default function Home() {
   }, []);
   const showCube = useCallback(() => {
     if (!engine.current) return;
+    handTracker.current?.resetGesture();
     ++operation.current; setLoading(''); setInfo(engine.current.showCube()); setSource('cube'); setArUrl(''); setError(''); setNote('');
     if (objectUrl.current) { URL.revokeObjectURL(objectUrl.current); objectUrl.current = null; }
   }, []);
@@ -245,6 +271,12 @@ export default function Home() {
     try {localStorage.setItem(cameraPreferenceKey,deviceId);} catch { /* Optional preference. */ }
     if (active) void startTracking(deviceId);
   };
+  const toggleHands=(enabled:boolean)=>{
+    setHandsEnabled(enabled);setHandError('');
+    if (!enabled) handTracker.current?.stop();
+    else if (!active) void startTracking();
+  };
+  const resetModel=()=>{handTracker.current?.resetGesture();engine.current?.resetModelTransform();};
   const forgetSaved=()=>{
     try {
       if (!forgetCalibration(localStorage,selectedCamera)) throw new Error('Storage unavailable');
@@ -293,6 +325,7 @@ export default function Home() {
         <div ref={canvasHost} className="canvas-host" />
         <div className="viewport-heading"><div className="scene-name"><Box size={16}/><span>{info.name}</span></div><span className={`live-status ${tracking ? 'is-live' : ''}`}><i />{active ? statusLabel : preview ? 'Pointer preview' : mode === 'orbit' ? 'Orbit view' : 'Window view'}</span></div>
         <div className="viewport-corner corner-tl"/><div className="viewport-corner corner-tr"/><div className="viewport-corner corner-bl"/><div className="viewport-corner corner-br"/>
+        {handsEnabled && cameraRunning && !handsPaused && <div className={`hand-feedback ${handFeedback.mode==='rotate' || handFeedback.mode==='scale' ? 'is-grabbing' : ''}`}><span aria-live="polite"><Hand size={16}/>{handMessage}</span>{handStatus==='ready' && <div className="hand-grips" aria-hidden="true">{handFeedback.points.map((p,i)=><i key={i} className={p.pinched ? 'is-pinched' : ''} style={{left:`${p.x*100}%`,top:`${p.y*100}%`}}/>)}</div>}</div>}
         {centering !== null && <div className="centering-target" aria-live="polite" aria-atomic="true"><Crosshair size={38}/><strong>{centering}</strong><span>Look here. Hold your head still.</span></div>}
         {!ready && !error && <div className="canvas-message"><LoaderCircle className="spin"/><p>Opening the 3D window…</p></div>}
         {!!loading && <div className="canvas-message loading"><LoaderCircle className="spin"/><p>Opening {loading}</p><span>Preparing geometry and textures</span></div>}
@@ -300,8 +333,8 @@ export default function Home() {
         <div className="viewport-bottom">
           <div className="view-hint"><span className="axis-mark"><i>X</i><i>Y</i><i>Z</i></span><span>{tracking ? 'Move your head. The window stays still.' : preview ? 'Move your pointer or drag to shift your viewpoint.' : mode === 'orbit' ? 'Drag to rotate · Scroll or pinch to zoom' : 'A window into depth. Enable tracking to look inside.'}</span></div>
           <div className="viewport-tools">
-            <button className="icon-button" title="Zoom out" aria-label="Zoom out" onClick={() => engine.current?.scaleBy(1 / 1.15)}><Minus size={17}/></button>
-            <button className="icon-button" title="Zoom in" aria-label="Zoom in" onClick={() => engine.current?.scaleBy(1.15)}><Plus size={17}/></button>
+            <button className="icon-button" title="Zoom out" aria-label="Zoom out" onClick={() => {handTracker.current?.resetGesture();engine.current?.scaleBy(1 / 1.15);}}><Minus size={17}/></button>
+            <button className="icon-button" title="Zoom in" aria-label="Zoom in" onClick={() => {handTracker.current?.resetGesture();engine.current?.scaleBy(1.15);}}><Plus size={17}/></button>
             <span className="tool-divider"/>
             <button className="icon-button" title={active ? 'Recenter eye position' : 'Reset view'} aria-label={active ? 'Recenter eye position' : 'Reset view'} onClick={recenter}><Crosshair size={18}/></button>
             {focus && active && <button className="icon-button" title="Stop tracking" aria-label="Stop tracking" onClick={() => tracker.current?.stop()}><CameraOff size={18}/></button>}
@@ -322,10 +355,11 @@ export default function Home() {
             {active && <div className="camera-label"><i className={tracking ? 'dot-live' : ''}/>{statusLabel}</div>}
           </div>
           <div className="webcam-control"><label htmlFor="webcam">Webcam</label><select id="webcam" value={selectedCamera} disabled={!ready || status==='starting'} onChange={event=>selectCamera(event.target.value)}><option value="">Default front camera</option>{selectedCamera && !cameras.some(c=>c.deviceId===selectedCamera) && <option value={selectedCamera}>{connectedCamera?.label || 'Previously selected webcam'}</option>}{cameras.map(c=><option key={c.deviceId} value={c.deviceId}>{c.label}</option>)}</select></div>
-          <p className="tracking-instruction">{status === 'starting' ? 'Allow the front camera. The tracker may take a few seconds to load.' : status === 'ready' ? 'Set your eye position, then look at the target during the countdown.' : status === 'lost' ? 'Bring both eyes back into view. The perspective is held until tracking returns.' : tracking ? 'Eye centers follow your head. Iris direction adds eye movement. Tune the effect below.' : 'Reconstructs your eye centers and gaze direction to update the 3D perspective.'}</p>
-          <button className={`button ${active ? 'secondary' : 'primary'} full-width`} disabled={!ready} onClick={active ? () => tracker.current?.stop() : ()=>void startTracking()}>{status === 'starting' ? <><X size={17}/>Cancel camera setup</> : active ? <><CameraOff size={17}/>Stop tracking</> : <><Camera size={17}/>Enable head tracking<ArrowUpRight size={17}/></>}</button>
+          <p className="tracking-instruction">{status === 'starting' ? 'Allow the front camera. The tracker may take a few seconds to load.' : status === 'ready' ? handsEnabled ? 'Hand controls work without eye calibration. Set your eye position to add head movement.' : 'Set your eye position, then look at the target during the countdown.' : status === 'lost' ? 'Bring both eyes back into view. The perspective is held until tracking returns.' : tracking ? 'Eye centers follow your head. Iris direction adds eye movement. Tune the effect below.' : 'Reconstructs your eye centers and gaze direction to update the 3D perspective.'}</p>
+          <button className={`button ${active ? 'secondary' : 'primary'} full-width`} disabled={!ready} onClick={active ? () => tracker.current?.stop() : ()=>void startTracking()}>{status === 'starting' ? <><X size={17}/>Cancel camera setup</> : active ? <><CameraOff size={17}/>Stop tracking</> : <><Camera size={17}/>{handsEnabled ? 'Enable camera' : 'Enable head tracking'}<ArrowUpRight size={17}/></>}</button>
           {active && status !== 'starting' && <button className="button teal-action full-width" onClick={recenter} disabled={status === 'lost' || centering !== null}><Crosshair size={17}/>{centering !== null ? 'Look at the target…' : tracking ? 'Recenter eye position' : 'Set eye position'}</button>}
           <span className="privacy"><ShieldCheck size={13}/> Camera and files stay on this device</span>
+          <div className="hand-controls"><div className="toggle-row"><label htmlFor="hand-controls"><Hand size={16}/> Hand controls</label><Switch id="hand-controls" checked={handsEnabled} disabled={!ready} onCheckedChange={toggleHands}/></div>{handsEnabled ? <><p className="hand-status" aria-live="polite">{handMessage}</p><ul><li><strong>One pinch + drag</strong> rotates the model.</li><li><strong>Two pinches</strong> scale apart/together and twist.</li><li>Release to hold. Keep the device still.</li></ul><div className="hand-control-actions">{handStatus==='error' && <button className="text-button" disabled={!cameraRunning || handsPaused} onClick={()=>{setHandError('');handTracker.current?.start();}}>Retry hand tracking</button>}<button className="text-button" disabled={!ready || !!loading} onClick={resetModel}><RotateCcw size={14}/>Reset model size & rotation</button></div></> : <p className="calibration-hint">Use webcam pinch gestures to scale and rotate the model.</p>}</div>
           {tracking && <><div className="tracking-data"><span>X <b>{telemetry.x.toFixed(1)}</b></span><span>Y <b>{telemetry.y.toFixed(1)}</b></span><span>View Z <b>{telemetry.z.toFixed(0)}</b> cm</span></div><div className="depth-reading"><span>Estimated screen distance <b>{telemetry.measured.toFixed(0)} cm</b></span><span>{Math.abs(telemetry.measured - telemetry.neutral) < 1.5 ? 'At your centered distance' : `${telemetry.measured < telemetry.neutral ? 'Closer' : 'Farther'} by ${Math.abs(telemetry.measured - telemetry.neutral).toFixed(0)} cm`}</span></div></>}
           {tracking && gaze && <div className={`gaze-reading ${gaze.valid ? '' : 'is-uncertain'}`}><svg viewBox="0 0 100 38" aria-label="Estimated left and right eye orientation">{([gaze.right, gaze.left]).map((ray, i) => <g key={i} transform={`translate(${25 + i * 50} 19)`}><circle r="14"/><path d="M-18 0H18M0-18V18"/><line x1="0" y1="0" x2={-ray.x * 25} y2={ray.y * 25}/><circle className="iris-dot" cx={-ray.x * 12} cy={ray.y * 12} r="3"/></g>)}</svg><span>{gaze.valid ? <>Raw iris direction<br/><b>{gaze.yaw.toFixed(0)}° horizontal · {gaze.pitch.toFixed(0)}° vertical</b></> : 'Eye direction uncertain'}</span></div>}
           {tracking && faceFit !== null && <p className="calibration-hint">Face reprojection error: {faceFit.toFixed(1)} camera px</p>}
@@ -349,7 +383,7 @@ export default function Home() {
           <Select value={source} onValueChange={v => { if (v === 'cube') showCube(); if (v === 'usdz') void load(); }}><SelectTrigger className="model-select" aria-label="Choose demo model" disabled={!ready || !!loading}><SelectValue>{source === 'cube' ? 'Depth cube' : source === 'usdz' ? 'USDZ test model' : info.name}</SelectValue></SelectTrigger><SelectContent><SelectItem value="cube">Depth cube</SelectItem><SelectItem value="usdz">USDZ test model</SelectItem>{source === 'local' && <SelectItem value="local">{info.name}</SelectItem>}</SelectContent></Select>
           <dl className="model-stats"><div><dt>Vertices</dt><dd>{formatNumber(info.vertices)}</dd></div><div><dt>{info.points ? 'Type' : 'Triangles'}</dt><dd>{info.points ? 'Points' : formatNumber(info.triangles)}</dd></div><div><dt>{source === 'cube' ? 'Source' : 'File size'}</dt><dd>{source === 'cube' ? 'Built in' : `${(info.bytes / 1048576).toFixed(1)} MB`}</dd></div></dl>
           <div className="toggle-row"><label htmlFor="wireframe">Wireframe</label><Switch id="wireframe" checked={wireframe} disabled={info.points} onCheckedChange={v => { setWireframe(v); engine.current?.setWireframe(v); }}/></div>
-          {source !== 'cube' && <div className="rotate-actions"><span>Rotate 90°</span>{(['x', 'y', 'z'] as const).map(axis => <button className="axis-button" key={axis} aria-label={`Rotate model 90 degrees around ${axis}`} onClick={() => engine.current?.rotateModel(axis)}>{axis.toUpperCase()}</button>)}</div>}
+          <div className="rotate-actions"><span>Rotate 90°</span>{(['x', 'y', 'z'] as const).map(axis => <button className="axis-button" key={axis} aria-label={`Rotate model 90 degrees around ${axis}`} onClick={() => {handTracker.current?.resetGesture();engine.current?.rotateModel(axis);}}>{axis.toUpperCase()}</button>)}</div>
           {arUrl && arAvailable && <a className="button secondary full-width ar-link" href={arUrl} rel="ar"><img src={assetUrl('/favicon.svg')} width="18" height="18" alt=""/>View in your space<ArrowUpRight size={16}/></a>}
         </section>
         <details className="control-section calibration"><summary><span><Crosshair size={17}/> Physical calibration</span><Plus size={15}/></summary>
@@ -362,7 +396,7 @@ export default function Home() {
           <span className="eye-label" id="eye-label">Viewpoint</span><Select value={eye} onValueChange={v => { if (v === 'center' || v === 'left' || v === 'right') { skipRestore.current=true; setEye(v); if (tracker.current) { tracker.current.eye = v; tracker.current.clearGazeProfile(); } setGazeCalibrated(false); } }}><SelectTrigger className="model-select" aria-labelledby="eye-label"><SelectValue>{eye === 'center' ? 'Between both eyes' : eye === 'left' ? 'Left eye' : 'Right eye'}</SelectValue></SelectTrigger><SelectContent><SelectItem value="center">Between both eyes</SelectItem><SelectItem value="left">Left eye</SelectItem><SelectItem value="right">Right eye</SelectItem></SelectContent></Select>
           <p className="small-copy">These are starting estimates, not device measurements. You can use your dominant eye as the viewpoint. Keep both eyes visible and open for tracking.</p>
         </details>
-        <details className="control-section help"><summary><span><Info size={17}/> How to get the depth effect</span><Plus size={15}/></summary><ol><li>Try the cube first. Put your device on a stable surface in good light.</li><li>Check Physical calibration, enable tracking, then look at the target to set your eye position.</li><li>Calibrate gaze with the screen targets. Then open Tune the depth effect, move as instructed, choose “This looks best,” then keep each setting.</li></ol><p>The webcam estimates head-anchored eye centers and iris direction. Eye rotation shifts the viewpoint subtly; Depth tuning can amplify that motion. The front of the box stays anchored to the screen. A normal display still shows one perspective to both eyes.</p><p>On iPhone or iPad, use Safari over HTTPS and allow the front camera. Full view works without native fullscreen. Tracking pauses when the app is backgrounded.</p><p>Keyboard: focus the canvas, use arrow keys to preview perspective, +/− to zoom, R to reset, and Escape to leave full view.</p><a className="text-button" href={assetUrl('/research.html')} target="_blank" rel="noreferrer">Research & implementation notes<ArrowUpRight size={14}/></a></details>
+        <details className="control-section help"><summary><span><Info size={17}/> How to get the depth effect</span><Plus size={15}/></summary><ol><li>Try the cube first. Put your device on a stable surface in good light.</li><li>Check Physical calibration, enable tracking, then look at the target to set your eye position.</li><li>Calibrate gaze with the screen targets. Then open Tune the depth effect, move as instructed, choose “This looks best,” then keep each setting.</li></ol><p>The webcam estimates head-anchored eye centers and iris direction. Eye rotation shifts the viewpoint subtly; Depth tuning can amplify that motion. The front of the box stays anchored to the screen. A normal display still shows one perspective to both eyes.</p><p>On iPhone or iPad, use Safari over HTTPS and allow the front camera. Full view works without native fullscreen. Tracking pauses when the app is backgrounded.</p><p>Hand controls: show an open hand, then pinch thumb and index finger. Drag one pinch to rotate; use two pinches to scale and twist. Release to hold. Keep hands below your face so eye tracking can continue.</p><p>Keyboard: focus the canvas, use arrow keys to preview perspective, +/− to zoom, R to reset, and Escape to leave full view.</p><a className="text-button" href={assetUrl('/research.html')} target="_blank" rel="noreferrer">Research & implementation notes<ArrowUpRight size={14}/></a></details>
         </div>
       </aside>
     </div>
