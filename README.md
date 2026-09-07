@@ -41,7 +41,7 @@ Open the **Gaze recorder** tab or [its direct link](https://cyclicalventures.git
 
 1. Put the webcam on the monitor you play on. Enable that camera, select **Entire monitor**, and check physical screen width and normal viewing distance.
 2. Choose **Calibrate full screen**. Look at the central crosshair for the countdown, then complete the existing three-distance calibration and accuracy checks. **Save & use** keeps a recorder-specific profile for this webcam. Viewer, monitor and page coordinate spaces have separate saves.
-3. Optionally choose **Attach game screen**, then **Entire screen** in the browser picker. Select the same monitor you calibrated. This captures screen video without audio; webcam frames are never recorded. Window/tab captures are rejected because they use different coordinate spaces.
+3. Optionally choose **Attach game screen**, then **Entire screen** in the browser picker. Select the same monitor you calibrated. This captures everything visible on that monitor, including any camera preview, without audio. Gaze-only sessions store coordinates, not webcam video. Window/tab captures are rejected because they use different coordinate spaces.
 4. Name the session and choose **Start recording**. Switch to the game while keeping Gaze open. Keep its window visible when possible. Return and choose **Stop & review**.
 5. Replay the gaze dot and recent trail, scrub the timeline, adjust speed, and select a time range for the dwell heatmap and most-viewed areas. Optional game footage shares the playback timeline. Export session JSON, CSV, a transparent map PNG or the screen video. Reopen or delete recordings from **Session history**.
 
