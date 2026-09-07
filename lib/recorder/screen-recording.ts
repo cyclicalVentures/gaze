@@ -12,9 +12,12 @@ export class ScreenRecording {
   private pendingBytes = 0;
   private stopping?: Promise<void>;
   private failed = false;
+  private started = false;
+  private stopped: Promise<void>;
   constructor(private stream: MediaStream, private store: SessionStore, private id: string, private onEnd: (reason: string) => void) {
     const mimeType = recordingMime();
     this.recorder = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: 1_500_000 });
+    this.stopped = new Promise(resolve => this.recorder.addEventListener('stop', () => resolve(), { once: true }));
     this.recorder.ondataavailable = event => {
       if (!event.data.size || this.failed) return;
       const index = this.index++, blob = event.data;
@@ -30,7 +33,7 @@ export class ScreenRecording {
   get type() { return this.recorder.mimeType; }
   start(): Promise<number> {
     return new Promise((resolve, reject) => {
-      this.recorder.addEventListener('start', () => resolve(performance.now()), { once: true });
+      this.recorder.addEventListener('start', () => { this.started = true; resolve(performance.now()); }, { once: true });
       this.recorder.addEventListener('error', () => reject(new Error('Screen recording could not start.')), { once: true });
       this.recorder.start(5000);
     });
@@ -39,8 +42,11 @@ export class ScreenRecording {
     if (this.stopping) return this.stopping;
     this.stopping = (async () => {
       if (this.recorder.state !== 'inactive') {
-        await new Promise<void>(resolve => { this.recorder.addEventListener('stop', () => resolve(), { once: true }); this.recorder.stop(); });
+        this.recorder.stop();
       }
+      // On an encoder error, state is already inactive before the final data and
+      // stop events arrive. Those chunks must finish before reading the video.
+      if (this.started) await this.stopped;
       this.stream.getTracks().forEach(t => { t.onended = null; t.stop(); });
       await this.writes;
     })();

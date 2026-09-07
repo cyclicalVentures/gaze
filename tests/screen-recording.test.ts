@@ -30,3 +30,10 @@ void test('revoked sharing and persistent-storage failures report a stop reason'
   env.media.ondataavailable?.({ data: new Blob(['first']) }); await env.recorder.stop();
   assert.ok(env.reasons.some(r => /could not be saved/.test(r))); assert.equal(env.chunks.length, 0); assert.equal(env.track.stopped, true);
 });
+void test('an inactive encoder after an error still drains its asynchronous final chunk before review', async t => {
+  const env = setup(t); await env.recorder.start(); env.media.state = 'inactive';
+  let completed = false; const stop = env.recorder.stop().then(() => { completed = true; });
+  await Promise.resolve(); assert.equal(completed, false);
+  env.media.ondataavailable?.({ data: new Blob(['recovered final chunk']) }); env.media.dispatchEvent(new Event('stop'));
+  await stop; assert.deepEqual(env.chunks, ['recovered final chunk']); assert.equal(env.track.stopped, true);
+});
