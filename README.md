@@ -21,7 +21,7 @@ Camera access requires HTTPS or localhost. To use a phone, open the deployed HTT
 4. Open **Calibrate gaze with targets**. Follow nine learning dots and five separate check dots at each of the normal, near and far distances. Move when prompted, then hold that distance. Review all three accuracy reports and choose **Save & use**. The profile is stored locally for the selected webcam and restored next time you enable it with a compatible screen layout. Use **Forget saved calibration** to remove it. Then open **Tune the depth effect**. Follow each movement prompt while values change automatically. Choose **This looks best**, optionally fine-adjust, then **Keep this setting**. Save after all five steps. Recenter and repeat gaze calibration after moving the screen/camera.
 5. Choose **USDZ test model** for the supplied Scaniverse model, or open/drop a `.ply` or `.usdz`. Use **Orbit** to inspect normally; Window remains physically anchored.
 
-Full view supports a CSS fallback on iOS. Camera access is opt-in and the stream is stopped on cancel, stop, backgrounding, page exit and mode changes. Face inference runs in a worker; its model and WASM are served from the same origin. No camera or imported model data is transmitted. The supplied demo is bundled as a site asset.
+Full view supports a CSS fallback on iOS. In the 3D viewer, camera access is opt-in and the stream is stopped on cancel, stop, backgrounding, page exit and mode changes. The recorder has a separate opt-in capture lifecycle described below. Face inference runs in a worker; its model and WASM are served from the same origin. No camera or imported model data is transmitted. The supplied demo is bundled as a site asset.
 
 **View → Grow when closer** is enabled by default: leaning in enlarges the model on screen. Turn it off for physical window scaling. This changes virtual depth only and saves the preference. **Estimated screen distance** should fall when you lean closer; **View Z** includes your rendering settings. The physical window projection can shrink an object's pixel footprint as you approach. See the [depth explanation](docs/research.md) and [newer tracking implementation shortlist](docs/sota-tracking.md).
 
@@ -34,6 +34,22 @@ Turn on **Hand controls** beneath the camera preview. It uses the same selected 
 - Release to hold. **Reset model size & rotation** returns the current model to its starting transform.
 
 The live markers show each detected pinch position. Hold the device still and keep hands below your face. Hand input pauses during centering, gaze calibration, depth tuning and model loading. Detection loss or a large jump releases the gesture; open your hand and pinch again. The same gestures work with the cube, PLY and USDZ models. Turning hand controls off keeps eye tracking active.
+
+## Gaze recorder
+
+Open the **Gaze recorder** tab or [its direct link](https://cyclicalventures.github.io/gaze/#recorder).
+
+1. Put the webcam on the monitor you play on. Enable that camera, select **Entire monitor**, and check physical screen width and normal viewing distance.
+2. Choose **Calibrate full screen**. Look at the central crosshair for the countdown, then complete the existing three-distance calibration and accuracy checks. **Save & use** keeps a recorder-specific profile for this webcam. Viewer, monitor and page coordinate spaces have separate saves.
+3. Optionally choose **Attach game screen**, then **Entire screen** in the browser picker. Select the same monitor you calibrated. This captures screen video without audio; webcam frames are never recorded. Window/tab captures are rejected because they use different coordinate spaces.
+4. Name the session and choose **Start recording**. Switch to the game while keeping Gaze open. Keep its window visible when possible. Return and choose **Stop & review**.
+5. Replay the gaze dot and recent trail, scrub the timeline, adjust speed, and select a time range for the dwell heatmap and most-viewed areas. Optional game footage shares the playback timeline. Export session JSON, CSV, a transparent map PNG or the screen video. Reopen or delete recordings from **Session history**.
+
+Gaze samples and five-second video chunks save in local IndexedDB. Sessions checkpoint every five seconds when the page can run. Interrupted sessions recover from the last completed checkpoint. Browser storage may be cleared or run out; export recordings you want to keep. Without local storage, gaze-only recording remains available in memory with explicit export reminders. A session stops after two hours or 512 MB of video.
+
+The tracker is paced by worker messages during recording rather than animation frames. This removes the app's automatic stop on backgrounding for desktop monitor sessions, **but cannot prevent browser/OS throttling, freezing or camera suspension**. Gaps are never interpolated; playback and heatmaps hold each observed gaze sample for at most 150 ms. Coverage reports distinguish on-screen, off-screen and unobserved time. iOS uses **This page** and must remain foregrounded; it cannot record gaze continuously over a native game. This page mode also stops recording when backgrounded. Full-screen calibration is required for monitor coordinates; use the same screen, browser zoom, webcam placement and user afterward.
+
+This remains approximate webcam gaze estimation. Held-out calibration errors are shown, and game footage synchronization uses the browser's recording-start event and capture timestamps, not hardware synchronization. Same-shaped monitors cannot be distinguished automatically by the screen-capture API. Physical gaming sessions, iOS behavior and audiovisual timing have not been browser/device tested. See [recorder implementation notes](docs/recorder.md).
 
 ## Scope
 

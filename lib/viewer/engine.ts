@@ -15,6 +15,7 @@ export class ViewerEngine {
   private modelContent?: THREE.Group;
   private resizeObserver: ResizeObserver;
   private disposed = false;
+  private visible = true;
   private loadId = 0;
   private width = 0.3;
   private height = 0.2;
@@ -77,6 +78,7 @@ export class ViewerEngine {
   private contextLost = (e: Event) => { e.preventDefault(); this.onError('The graphics context was interrupted. It will recover automatically; reload if the scene stays blank.'); };
   private contextRestored = () => { this.resize(); };
   setPhysicalWidth(cm: number) { this.metersPerPixel = cm / 100 / window.innerWidth; this.resize(); }
+  setVisible(visible: boolean) { this.visible = visible; if (visible) this.resize(); }
   calibrateOrigin() { const r = this.host.getBoundingClientRect(); this.calibrationCenter = { x: r.left + r.width / 2, y: r.top + r.height / 2 }; this.eye = { x: 0, y: 0, z: this.distance }; }
   restoreScreenGeometry(screen: { metersPerPixel: number; center: { x: number; y: number } }) { this.metersPerPixel=screen.metersPerPixel; this.calibrationCenter={...screen.center}; this.resize(); this.center(); }
   getScreenGeometry() { const r = this.host.getBoundingClientRect(); return { width: window.innerWidth, height: window.innerHeight, metersPerPixel: this.metersPerPixel, center: this.calibrationCenter ?? { x: r.left + r.width / 2, y: r.top + r.height / 2 } }; }
@@ -172,7 +174,7 @@ export class ViewerEngine {
     this.chamber.visible = this.showRoom;
   }
   private render = (time: number) => {
-    if (this.disposed || document.hidden) return;
+    if (this.disposed || !this.visible || document.hidden) return;
     const dt = Math.min((time - this.lastFrame) / 1000, 0.05); this.lastFrame = time;
     if (this.mode === 'window') {
       const a = this.tracking ? 1 : 1 - Math.exp(-dt * 16);

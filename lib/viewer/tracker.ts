@@ -8,10 +8,13 @@ import type { CalibrationSnapshot, CameraIdentity } from './calibration-storage'
 export type TrackingStatus = 'off' | 'starting' | 'ready' | 'tracking' | 'lost';
 export type GeometryMode = 'metric' | 'legacy';
 export type DepthReading = { measured: number; neutral: number; method: GeometryMode; errorPx?: number; calibrated: boolean };
+export type ScreenGaze = { time: number; point: { x: number; y: number } | null; revision: number };
 export class HeadTracker {
   private worker?: Worker;
   private stream?: MediaStream;
   private frame = 0;
+  private continuous = false;
+  private screenListeners = new Set<(sample: ScreenGaze) => void>();
   private generation = 0;
   private busy = false;
   private lastTime = -1;
@@ -57,6 +60,18 @@ export class HeadTracker {
     return true;
   }
   subscribeGaze(listener: (sample: GazeSample) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  subscribeScreenGaze(listener: (sample: ScreenGaze) => void) { this.screenListeners.add(listener); return () => { this.screenListeners.delete(listener); }; }
+  /** Recording is paced by the worker, independently of visible animation frames.
+   * Browsers may still freeze a page; consumers must account for gaps. */
+  setContinuousCapture(enabled: boolean) {
+    if (this.continuous === enabled) return;
+    this.continuous = enabled; cancelAnimationFrame(this.frame);
+    this.worker?.postMessage({type:'continuous',enabled});
+    if (this.worker && this.status !== 'starting') this.loop();
+  }
+  private emitScreen(time: number, point: ScreenGaze['point'] = null) {
+    for (const listener of this.screenListeners) listener({time,point,revision:this.revision});
+  }
   clearGazeProfile() { this.profile = undefined; ++this.revision; }
   setScreenGeometry(screen: ScreenGeometry) { this.screen = screen; this.clearGazeProfile(); }
   setGeometryMode(mode: GeometryMode) { this.geometryMode = mode; this.clearGazeProfile(); this.filters.forEach(f => f.reset()); }
@@ -84,35 +99,40 @@ export class HeadTracker {
       this.worker.onerror = () => { this.fail('The camera tracker could not start. Try an up-to-date Safari or Chrome browser.'); };
       this.worker.onmessage = ({ data }) => {
         if (generation !== this.generation) return;
-        if (data.type === 'ready') { clearTimeout(this.initTimeout); this.initTimeout = undefined; this.updateStatus('ready'); this.loop(); }
+        if (data.type === 'ready') { clearTimeout(this.initTimeout); this.initTimeout = undefined; this.updateStatus('ready'); if (this.continuous) this.worker?.postMessage({type:'continuous',enabled:true}); this.loop(); }
+        if (data.type === 'tick' && this.continuous) this.loop();
         if (data.type === 'error') { this.fail('The eye tracker could not process the camera. Stop and try again, or use pointer preview.'); }
         if (data.type === 'result') {
           this.busy = false;
           const observation = data.observation as EyeObservation | null;
-          if (!observation) { if (performance.now() - this.lastFace > 650) this.updateStatus('lost'); return; }
+          if (!observation) { this.emitScreen(this.lastSent); if (performance.now() - this.lastFace > 650) this.updateStatus('lost'); return; }
+          if (performance.now() - observation.time > 300) { this.emitScreen(observation.time); this.updateStatus('lost'); return; }
           this.lastFace = performance.now(); this.recent.push(observation);
           this.recent = this.recent.filter(v => observation.time - v.time < 700);
           if (!this.baseline) this.updateStatus('ready');
           if (this.baseline) {
             if (observation.imageWidth!==this.baseline.imageWidth || observation.imageHeight!==this.baseline.imageHeight) { this.fail('Camera resolution changed. Start tracking and recalibrate for the new camera settings.'); return; }
             const solution = this.eyeModel ? reconstructEyes(observation, this.eyeModel, this.distance, this.ipd, this.eye) : null;
-            if (this.eyeModel && !solution) { this.updateStatus('lost'); return; }
+            if (this.eyeModel && !solution) { this.emitScreen(observation.time); this.updateStatus('lost'); return; }
             const metric = this.geometryMode === 'metric' && this.metricModel ? fitMetricFace(observation, this.metricModel, this.eye) : null;
-            if (this.geometryMode === 'metric' && this.metricModel && !metric) { this.updateStatus('lost'); return; }
+            if (this.geometryMode === 'metric' && this.metricModel && !metric) { this.emitScreen(observation.time); this.updateStatus('lost'); return; }
             const head = metric?.position ?? solution?.position ?? estimateEye(observation, this.baseline, this.distance, this.ipd, this.eye);
             let offset = solution?.eyeOffset ?? { x: 0, y: 0, z: 0 };
+            let screenPoint: ScreenGaze['point'] = null;
             if (solution && this.screen) {
               const signal = gazeSignal(head, solution.gaze, this.screen);
               if (signal) {
                 for (const listener of this.listeners) listener({ time: observation.time, signal, distance: head.z, revision: this.revision });
                 if (this.profile) {
                   const target = predictGaze(this.profile, signal, head.z);
+                  if (Number.isFinite(target.x + target.y)) screenPoint = target;
                   // Avoid unstable extrapolation outside the calibrated screen.
                   if (Number.isFinite(target.x + target.y) && target.x >= -.25 && target.x <= 1.25 && target.y >= -.25 && target.y <= 1.25) offset = calibratedEyeOffset(head, target, this.screen);
                   else offset = { x: 0, y: 0, z: 0 };
                 }
               }
             }
+            this.emitScreen(observation.time, screenPoint);
             const eye = mapTrackedEye(head, offset, this.distance, this.tuning);
             this.updateStatus('tracking');
             this.filters.forEach(f => f.setCutoff(this.tuning.response));
@@ -129,7 +149,7 @@ export class HeadTracker {
   }
   private loop = () => {
     if (!this.worker) return;
-    this.frame = requestAnimationFrame(this.loop);
+    if (!this.continuous) this.frame = requestAnimationFrame(this.loop);
     const now = performance.now();
     if (this.busy && now - this.lastSent > 5000) { this.fail('Camera processing stalled. Start tracking again or use pointer preview.'); return; }
     if (this.baseline && now - this.lastFace > 650) this.updateStatus('lost');

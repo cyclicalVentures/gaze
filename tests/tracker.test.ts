@@ -174,3 +174,35 @@ void test('live distance blending follows measured head depth while Grow when cl
   assert.ok(Math.abs(env.depth.at(-1)!.measured-.44)<1e-6);
   assert.ok(env.positions.at(-1)!.z>.65);assert.ok(env.positions.at(-1)!.x<-.001,'near mapping should be selected despite reversed virtual depth');
 });
+
+void test('screen subscriptions receive calibrated coordinates and explicit loss without the viewer depth reversal', async t => {
+  const env = environment(t), { calibration } = calibrationFixture();
+  for (const layer of calibration.profile.layers!) layer.profile = { ...layer.profile, x: [.8, 0, 0, 0, 0, 0], y: [.2, 0, 0, 0, 0, 0] };
+  await env.tracker.start(); assert.equal(env.tracker.restoreCalibration(calibration), true);
+  const worker = env.WorkerMock.instances[0]; worker.emit({ type: 'ready' });
+  const samples: import('../lib/viewer/tracker').ScreenGaze[] = [], unsubscribe = env.tracker.subscribeScreenGaze(s => samples.push(s));
+  const emit = () => { env.clock.now += 50; worker.emit({ type: 'result', observation: { ...calibration.baseline, time: env.clock.now }, inferenceMs: 10 }); };
+  emit(); assert.deepEqual(samples.at(-1)?.point, { x: .8, y: .2 });
+  env.tracker.tuning = { ...env.tracker.tuning, depthDirection: 1 }; emit(); assert.deepEqual(samples.at(-1)?.point, { x: .8, y: .2 });
+  env.tracker.clearGazeProfile(); emit(); assert.equal(samples.at(-1)?.point, null);
+  worker.emit({ type: 'result', observation: null, inferenceMs: 10 }); assert.equal(samples.at(-1)?.point, null);
+  const count = samples.length; unsubscribe(); emit(); assert.equal(samples.length, count);
+});
+void test('recording frame cadence comes from the worker and survives absent animation frames with backpressure', async t => {
+  const env = environment(t); await env.tracker.start(); const worker = env.WorkerMock.instances[0]; worker.emit({ type: 'ready' }); await Promise.resolve();
+  worker.emit({ type: 'result', observation: null }); env.tracker.setContinuousCapture(true);
+  assert.equal(env.callbacks.size, 0); assert.ok(worker.messages.some(m => (m as { type: string; enabled?: boolean }).type === 'continuous' && (m as { enabled: boolean }).enabled));
+  const before = worker.messages.filter(m => (m as { type: string }).type === 'frame').length;
+  env.clock.now += 60; env.video.currentTime += .06; worker.emit({ type: 'tick' }); await Promise.resolve();
+  assert.equal(worker.messages.filter(m => (m as { type: string }).type === 'frame').length, before + 1);
+  env.clock.now += 60; env.video.currentTime += .06; worker.emit({ type: 'tick' }); await Promise.resolve();
+  assert.equal(worker.messages.filter(m => (m as { type: string }).type === 'frame').length, before + 1, 'never queue frames while inference is busy');
+  env.tracker.setContinuousCapture(false); assert.ok(env.callbacks.size > 0); env.tracker.stop(); assert.equal(env.tracks[0].stopped, true);
+});
+void test('delayed camera results cannot add stale on-screen gaze to a recording', async t => {
+  const env = environment(t), { calibration } = calibrationFixture(); await env.tracker.start(); env.tracker.restoreCalibration(calibration);
+  const worker = env.WorkerMock.instances[0]; worker.emit({ type: 'ready' });
+  const samples: import('../lib/viewer/tracker').ScreenGaze[] = []; env.tracker.subscribeScreenGaze(s => samples.push(s));
+  worker.emit({ type: 'result', observation: { ...calibration.baseline, time: env.clock.now - 350 }, inferenceMs: 350 });
+  assert.equal(samples.at(-1)?.point, null); assert.equal(env.statuses.at(-1), 'lost');
+});

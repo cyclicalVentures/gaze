@@ -2,7 +2,13 @@
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { observeFace } from './eye-model';
 let detector: FaceLandmarker | undefined;
+let clock: ReturnType<typeof setInterval> | undefined;
 self.onmessage = async (event: MessageEvent) => {
+  if (event.data.type === 'continuous') {
+    clearInterval(clock); clock = undefined;
+    if (event.data.enabled) clock = setInterval(() => self.postMessage({type:'tick'}), 50);
+    return;
+  }
   if (event.data.type === 'init') {
     try {
       const wasm = await FilesetResolver.forVisionTasks(event.data.base, true);
